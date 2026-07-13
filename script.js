@@ -4,9 +4,9 @@ const ctx = canvas.getContext("2d");
 function resize() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+  createLobbyButtons();
 }
 window.addEventListener("resize", resize);
-resize();
 
 const isMobile = window.innerWidth < 768;
 
@@ -17,6 +17,7 @@ let glow = 0;
 let interactionTime = 0;
 let lastTime = performance.now();
 
+let inLobby = true;
 let phase = "incertidumbre";
 let anxietyMix = 0;
 let expectationMix = 0;
@@ -25,8 +26,16 @@ let expectationStart = null;
 const shapes = [];
 const planets = [];
 const burstRays = [];
+let lobbyButtons = [];
 
-canvas.addEventListener("mousedown", () => {
+resize();
+
+canvas.addEventListener("mousedown", (e) => {
+  if (inLobby) {
+    handleLobbySelection(e.clientX, e.clientY);
+    return;
+  }
+
   accelerating = true;
 });
 
@@ -38,6 +47,14 @@ canvas.addEventListener(
   "touchstart",
   (e) => {
     e.preventDefault();
+
+    const touch = e.touches[0];
+
+    if (inLobby) {
+      handleLobbySelection(touch.clientX, touch.clientY);
+      return;
+    }
+
     accelerating = true;
   },
   { passive: false }
@@ -54,15 +71,99 @@ window.addEventListener("touchcancel", () => {
 window.addEventListener("keydown", (e) => {
   if (e.key.toLowerCase() !== "k") return;
 
+  if (inLobby) {
+    startPhase("incertidumbre");
+    return;
+  }
+
   if (phase === "incertidumbre") {
-    interactionTime = 15;
-    phase = "ansiedad";
+    startPhase("ansiedad");
   } else if (phase === "ansiedad") {
-    interactionTime = 30;
-    phase = "expectativa";
-    expectationStart = performance.now();
+    startPhase("expectativa");
   }
 });
+
+function createLobbyButtons() {
+  const w = canvas.width;
+  const h = canvas.height;
+
+  const buttonWidth = Math.min(320, w * 0.72);
+  const buttonHeight = 56;
+  const gap = 18;
+
+  const totalHeight = buttonHeight * 3 + gap * 2;
+  const startY = h / 2 - totalHeight / 2 + 40;
+  const x = w / 2 - buttonWidth / 2;
+
+  lobbyButtons = [
+    {
+      label: "Incertidumbre",
+      phase: "incertidumbre",
+      x,
+      y: startY,
+      width: buttonWidth,
+      height: buttonHeight
+    },
+    {
+      label: "Ansiedad",
+      phase: "ansiedad",
+      x,
+      y: startY + buttonHeight + gap,
+      width: buttonWidth,
+      height: buttonHeight
+    },
+    {
+      label: "Expectativa",
+      phase: "expectativa",
+      x,
+      y: startY + (buttonHeight + gap) * 2,
+      width: buttonWidth,
+      height: buttonHeight
+    }
+  ];
+}
+
+function handleLobbySelection(x, y) {
+  for (const button of lobbyButtons) {
+    const insideX = x >= button.x && x <= button.x + button.width;
+    const insideY = y >= button.y && y <= button.y + button.height;
+
+    if (insideX && insideY) {
+      startPhase(button.phase);
+      return;
+    }
+  }
+}
+
+function startPhase(selectedPhase) {
+  inLobby = false;
+  phase = selectedPhase;
+  accelerating = false;
+
+  if (selectedPhase === "incertidumbre") {
+    interactionTime = 0;
+    anxietyMix = 0;
+    expectationMix = 0;
+    expectationStart = null;
+    speed = 2;
+  }
+
+  if (selectedPhase === "ansiedad") {
+    interactionTime = 15;
+    anxietyMix = 1;
+    expectationMix = 0;
+    expectationStart = null;
+    speed = 1.1;
+  }
+
+  if (selectedPhase === "expectativa") {
+    interactionTime = 30;
+    anxietyMix = 1;
+    expectationMix = 0;
+    expectationStart = performance.now();
+    speed = 0.55;
+  }
+}
 
 function resetShape(s) {
   s.x = (Math.random() - 0.5) * canvas.width;
@@ -122,6 +223,11 @@ function animate(now = performance.now()) {
   const delta = (now - lastTime) / 1000;
   lastTime = now;
 
+  if (inLobby) {
+    drawLobby(now);
+    return;
+  }
+
   if (accelerating && phase !== "expectativa") {
     interactionTime += delta;
   }
@@ -171,6 +277,64 @@ function animate(now = performance.now()) {
 }
 
 animate();
+
+function drawLobby(now) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  ctx.fillStyle = "#050505";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const backgroundGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, canvas.width);
+
+  backgroundGlow.addColorStop(0, "rgba(80, 18, 28, 0.16)");
+  backgroundGlow.addColorStop(0.45, "rgba(30, 7, 18, 0.24)");
+  backgroundGlow.addColorStop(1, "rgba(0, 0, 0, 0)");
+
+  ctx.fillStyle = backgroundGlow;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const pulse = Math.sin(now * 0.002) * 0.08 + 0.92;
+
+  const light = ctx.createRadialGradient(cx, cy, 0, cx, cy, 150 * pulse);
+  light.addColorStop(0, "rgba(255, 235, 232, 0.7)");
+  light.addColorStop(0.18, "rgba(255, 105, 112, 0.28)");
+  light.addColorStop(1, "rgba(0, 0, 0, 0)");
+
+  ctx.fillStyle = light;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 150 * pulse, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.fillStyle = "rgba(255, 235, 232, 0.76)";
+  ctx.arc(cx, cy, 24 * pulse, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.font = "16px Arial, Helvetica, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  for (const button of lobbyButtons) {
+    ctx.fillStyle = "rgba(12, 5, 12, 0.72)";
+    ctx.strokeStyle = "rgba(255, 120, 130, 0.45)";
+    ctx.lineWidth = 1;
+
+    ctx.beginPath();
+    ctx.roundRect(button.x, button.y, button.width, button.height, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(255, 205, 205, 0.88)";
+    ctx.fillText(
+      button.label,
+      button.x + button.width / 2,
+      button.y + button.height / 2
+    );
+  }
+}
 
 function drawBackground() {
   const red = Math.floor(4 + 18 * anxietyMix + 8 * expectationMix);
