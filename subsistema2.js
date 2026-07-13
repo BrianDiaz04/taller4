@@ -129,9 +129,9 @@ function createButtons() {
   const x0 = W / 2 - total / 2;
 
   buttons = [
-    { label: "Sinergias", work: "sinergias", x: x0, y: 18, w: bw, h: bh },
-    { label: "Ramas", work: "ramas", x: x0 + bw + gap, y: 18, w: bw, h: bh },
-    { label: "Ruptura", work: "ruptura", x: x0 + (bw + gap) * 2, y: 18, w: bw, h: bh }
+    { label: "Colaboracion", work: "sinergias", x: x0, y: 18, w: bw, h: bh },
+    { label: "Empatia", work: "ramas", x: x0 + bw + gap, y: 18, w: bw, h: bh },
+    { label: "Identidad", work: "ruptura", x: x0 + (bw + gap) * 2, y: 18, w: bw, h: bh }
   ];
 }
 

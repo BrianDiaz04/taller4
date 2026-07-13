@@ -14,14 +14,21 @@ let accelerating = false;
 let speed = 2;
 let glow = 0;
 
-let interactionTime = 0;
 let lastTime = performance.now();
 
 let inLobby = true;
 let phase = "incertidumbre";
+
 let anxietyMix = 0;
 let expectationMix = 0;
-let expectationStart = null;
+
+let anxietyHoldTime = 0;
+let expectationHoldTime = 0;
+let expectationStage = "approach"; // approach, flash, final
+let expectationFlashStart = null;
+
+const expectationChargeDuration = 5;
+const expectationFlashDuration = 7;
 
 const shapes = [];
 const planets = [];
@@ -31,10 +38,8 @@ let lobbyButtons = [];
 resize();
 
 canvas.addEventListener("mousedown", (e) => {
-  if (inLobby) {
-    handleLobbySelection(e.clientX, e.clientY);
-    return;
-  }
+  if (handleLobbySelection(e.clientX, e.clientY)) return;
+  if (inLobby) return;
 
   accelerating = true;
 });
@@ -50,10 +55,8 @@ canvas.addEventListener(
 
     const touch = e.touches[0];
 
-    if (inLobby) {
-      handleLobbySelection(touch.clientX, touch.clientY);
-      return;
-    }
+    if (handleLobbySelection(touch.clientX, touch.clientY)) return;
+    if (inLobby) return;
 
     accelerating = true;
   },
@@ -80,43 +83,43 @@ window.addEventListener("keydown", (e) => {
     startPhase("ansiedad");
   } else if (phase === "ansiedad") {
     startPhase("expectativa");
+  } else {
+    startPhase("incertidumbre");
   }
 });
 
 function createLobbyButtons() {
   const w = canvas.width;
-  const h = canvas.height;
 
-  const buttonWidth = Math.min(320, w * 0.72);
-  const buttonHeight = 56;
-  const gap = 18;
-
-  const totalHeight = buttonHeight * 3 + gap * 2;
-  const startY = h / 2 - totalHeight / 2 + 40;
-  const x = w / 2 - buttonWidth / 2;
+  const gap = 10;
+  const buttonWidth = Math.min(170, (w - 64) / 3);
+  const buttonHeight = 38;
+  const totalWidth = buttonWidth * 3 + gap * 2;
+  const x = w / 2 - totalWidth / 2;
+  const y = 22;
 
   lobbyButtons = [
     {
       label: "Incertidumbre",
       phase: "incertidumbre",
       x,
-      y: startY,
+      y,
       width: buttonWidth,
       height: buttonHeight
     },
     {
       label: "Ansiedad",
       phase: "ansiedad",
-      x,
-      y: startY + buttonHeight + gap,
+      x: x + buttonWidth + gap,
+      y,
       width: buttonWidth,
       height: buttonHeight
     },
     {
       label: "Expectativa",
       phase: "expectativa",
-      x,
-      y: startY + (buttonHeight + gap) * 2,
+      x: x + (buttonWidth + gap) * 2,
+      y,
       width: buttonWidth,
       height: buttonHeight
     }
@@ -130,9 +133,11 @@ function handleLobbySelection(x, y) {
 
     if (insideX && insideY) {
       startPhase(button.phase);
-      return;
+      return true;
     }
   }
+
+  return false;
 }
 
 function startPhase(selectedPhase) {
@@ -140,34 +145,120 @@ function startPhase(selectedPhase) {
   phase = selectedPhase;
   accelerating = false;
 
-  if (selectedPhase === "incertidumbre") {
-    interactionTime = 0;
-    anxietyMix = 0;
-    expectationMix = 0;
-    expectationStart = null;
-    speed = 2;
-  }
+  anxietyMix = 0;
+  expectationMix = 0;
 
-  if (selectedPhase === "ansiedad") {
-    interactionTime = 15;
-    anxietyMix = 1;
-    expectationMix = 0;
-    expectationStart = null;
-    speed = 1.1;
-  }
+  anxietyHoldTime = 0;
+  expectationHoldTime = 0;
+  expectationStage = "approach";
+  expectationFlashStart = null;
 
-  if (selectedPhase === "expectativa") {
-    interactionTime = 30;
-    anxietyMix = 1;
-    expectationMix = 0;
-    expectationStart = performance.now();
-    speed = 0.55;
+  speed = 2;
+
+  for (const s of shapes) {
+    resetShape(s);
   }
 }
 
+function getStage() {
+  const margin = isMobile ? 18 : 40;
+  const top = isMobile ? 82 : 86;
+
+  return {
+    x: margin,
+    y: top,
+    width: canvas.width - margin * 2,
+    height: canvas.height - top - margin
+  };
+}
+
+function drawOuterBackground() {
+  ctx.fillStyle = "#050409";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  const glowBackground = ctx.createRadialGradient(cx, cy, 0, cx, cy, canvas.width);
+  glowBackground.addColorStop(0, "rgba(80, 18, 28, 0.12)");
+  glowBackground.addColorStop(0.5, "rgba(28, 8, 18, 0.18)");
+  glowBackground.addColorStop(1, "rgba(0, 0, 0, 0)");
+
+  ctx.fillStyle = glowBackground;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function clipStage() {
+  const stage = getStage();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(stage.x, stage.y, stage.width, stage.height);
+  ctx.clip();
+}
+
+function drawStageFrame() {
+  const stage = getStage();
+
+  ctx.save();
+
+  ctx.strokeStyle = "rgba(255, 130, 135, 0.28)";
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(stage.x, stage.y, stage.width, stage.height);
+
+  ctx.strokeStyle = "rgba(255, 220, 210, 0.08)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(stage.x + 8, stage.y + 8, stage.width - 16, stage.height - 16);
+
+  ctx.restore();
+}
+
+function drawPhaseButtons() {
+  ctx.save();
+
+  ctx.font = isMobile
+    ? "12px Arial, Helvetica, sans-serif"
+    : "13px Arial, Helvetica, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  for (const button of lobbyButtons) {
+    const active = !inLobby && button.phase === phase;
+
+    ctx.fillStyle = active
+      ? "rgba(255, 95, 100, 0.24)"
+      : "rgba(12, 5, 12, 0.76)";
+
+    ctx.strokeStyle = active
+      ? "rgba(255, 210, 205, 0.72)"
+      : "rgba(255, 120, 130, 0.34)";
+
+    ctx.lineWidth = 1;
+
+    ctx.beginPath();
+    ctx.roundRect(button.x, button.y, button.width, button.height, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = active
+      ? "rgba(255, 235, 230, 0.96)"
+      : "rgba(255, 205, 205, 0.72)";
+
+    ctx.fillText(
+      button.label,
+      button.x + button.width / 2,
+      button.y + button.height / 2
+    );
+  }
+
+  ctx.restore();
+}
+
 function resetShape(s) {
-  s.x = (Math.random() - 0.5) * canvas.width;
-  s.y = (Math.random() - 0.5) * canvas.height;
+  const stage = getStage();
+
+  s.x = (Math.random() - 0.5) * stage.width;
+  s.y = (Math.random() - 0.5) * stage.height;
   s.z = Math.random() * 2100 + 350;
   s.type = Math.random() < 0.5 ? "square" : "triangle";
   s.shake = Math.random() * Math.PI * 2;
@@ -223,48 +314,23 @@ function animate(now = performance.now()) {
   const delta = (now - lastTime) / 1000;
   lastTime = now;
 
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawOuterBackground();
+
   if (inLobby) {
-    drawLobby(now);
+    clipStage();
+    drawLobbyScene(now);
+    ctx.restore();
+
+    drawStageFrame();
+    drawPhaseButtons();
     return;
   }
 
-  if (accelerating && phase !== "expectativa") {
-    interactionTime += delta;
-  }
+  updatePhase(delta, now);
+  updateSpeed();
 
-  if (interactionTime >= 30) {
-    if (phase !== "expectativa") {
-      expectationStart = now;
-    }
-
-    phase = "expectativa";
-  } else if (interactionTime >= 15) {
-    phase = "ansiedad";
-  }
-
-  if (phase === "ansiedad") {
-    anxietyMix += (1 - anxietyMix) * 0.022;
-  }
-
-  if (phase === "expectativa") {
-    anxietyMix += (1 - anxietyMix) * 0.018;
-    expectationMix += (1 - expectationMix) * 0.014;
-  }
-
-  const normalTargetSpeed = accelerating ? 13 : 1.8;
-  const anxietyTargetSpeed = accelerating ? 5.2 : 1.1;
-  const expectationTargetSpeed = accelerating ? 2.1 : 0.55;
-
-  const anxiousSpeed =
-    normalTargetSpeed * (1 - anxietyMix) + anxietyTargetSpeed * anxietyMix;
-
-  const targetSpeed =
-    anxiousSpeed * (1 - expectationMix) +
-    expectationTargetSpeed * expectationMix;
-
-  speed += (targetSpeed - speed) * 0.045;
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  clipStage();
 
   drawBackground();
   drawTunnel(now);
@@ -274,91 +340,190 @@ function animate(now = performance.now()) {
   drawSolarSystem(now);
   drawLight(now);
   drawFlash(now);
+
+  ctx.restore();
+
+  drawStageFrame();
+  drawPhaseButtons();
 }
 
 animate();
 
-function drawLobby(now) {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+function updatePhase(delta, now) {
+  if (phase === "incertidumbre") {
+    anxietyMix += (0 - anxietyMix) * 0.04;
+    expectationMix += (0 - expectationMix) * 0.04;
+    return;
+  }
 
-  const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
+  if (phase === "ansiedad") {
+    expectationMix += (0 - expectationMix) * 0.04;
+
+    if (accelerating) {
+      anxietyHoldTime += delta;
+    }
+
+    const target = Math.min(1, anxietyHoldTime / 5);
+    anxietyMix += (target - anxietyMix) * 0.05;
+    return;
+  }
+
+  if (phase === "expectativa") {
+    anxietyMix += (0 - anxietyMix) * 0.035;
+
+    if (expectationStage === "approach") {
+      if (accelerating) {
+        expectationHoldTime += delta;
+      }
+
+      if (expectationHoldTime >= expectationChargeDuration) {
+        expectationStage = "flash";
+        expectationFlashStart = now;
+      }
+    }
+
+    if (expectationStage === "flash") {
+      const elapsed = (now - expectationFlashStart) / 1000;
+
+      if (elapsed >= expectationFlashDuration) {
+        expectationStage = "final";
+      }
+    }
+
+    if (expectationStage === "final") {
+      expectationMix += (1 - expectationMix) * 0.018;
+    }
+  }
+}
+
+function updateSpeed() {
+  let targetSpeed = accelerating ? 13 : 1.8;
+
+  if (phase === "ansiedad") {
+    const anxietyTargetSpeed = accelerating ? 5.2 : 1.1;
+    targetSpeed = targetSpeed * (1 - anxietyMix) + anxietyTargetSpeed * anxietyMix;
+  }
+
+  if (phase === "expectativa") {
+    if (expectationStage === "approach") {
+      targetSpeed = accelerating ? 15 : 1.8;
+    }
+
+    if (expectationStage === "flash") {
+      targetSpeed = 0.35;
+    }
+
+    if (expectationStage === "final") {
+      const finalSpeed = accelerating ? 2.1 : 0.55;
+      targetSpeed = targetSpeed * (1 - expectationMix) + finalSpeed * expectationMix;
+    }
+  }
+
+  speed += (targetSpeed - speed) * 0.045;
+}
+
+function drawLobbyScene(now) {
+  const stage = getStage();
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
 
   ctx.fillStyle = "#050505";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
 
-  const backgroundGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, canvas.width);
+  const backgroundGlow = ctx.createRadialGradient(
+    cx,
+    cy,
+    0,
+    cx,
+    cy,
+    stage.width * 0.7
+  );
 
-  backgroundGlow.addColorStop(0, "rgba(80, 18, 28, 0.16)");
+  backgroundGlow.addColorStop(0, "rgba(80, 18, 28, 0.18)");
   backgroundGlow.addColorStop(0.45, "rgba(30, 7, 18, 0.24)");
   backgroundGlow.addColorStop(1, "rgba(0, 0, 0, 0)");
 
   ctx.fillStyle = backgroundGlow;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
 
   const pulse = Math.sin(now * 0.002) * 0.08 + 0.92;
 
-  const light = ctx.createRadialGradient(cx, cy, 0, cx, cy, 150 * pulse);
-  light.addColorStop(0, "rgba(255, 235, 232, 0.7)");
-  light.addColorStop(0.18, "rgba(255, 105, 112, 0.28)");
+  const light = ctx.createRadialGradient(cx, cy, 0, cx, cy, 140 * pulse);
+  light.addColorStop(0, "rgba(255, 235, 232, 0.58)");
+  light.addColorStop(0.18, "rgba(255, 105, 112, 0.22)");
   light.addColorStop(1, "rgba(0, 0, 0, 0)");
 
   ctx.fillStyle = light;
   ctx.beginPath();
-  ctx.arc(cx, cy, 150 * pulse, 0, Math.PI * 2);
+  ctx.arc(cx, cy, 140 * pulse, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.beginPath();
-  ctx.fillStyle = "rgba(255, 235, 232, 0.76)";
-  ctx.arc(cx, cy, 24 * pulse, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255, 235, 232, 0.7)";
+  ctx.arc(cx, cy, 20 * pulse, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.font = "16px Arial, Helvetica, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
+  ctx.strokeStyle = "rgba(255, 130, 135, 0.12)";
+  ctx.lineWidth = 1;
 
-  for (const button of lobbyButtons) {
-    ctx.fillStyle = "rgba(12, 5, 12, 0.72)";
-    ctx.strokeStyle = "rgba(255, 120, 130, 0.45)";
-    ctx.lineWidth = 1;
+  for (let i = 0; i < 28; i++) {
+    const angle = ((Math.PI * 2) / 28) * i;
+    const x = cx + Math.cos(angle) * stage.width;
+    const y = cy + Math.sin(angle) * stage.height;
 
     ctx.beginPath();
-    ctx.roundRect(button.x, button.y, button.width, button.height, 8);
-    ctx.fill();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(x, y);
     ctx.stroke();
-
-    ctx.fillStyle = "rgba(255, 205, 205, 0.88)";
-    ctx.fillText(
-      button.label,
-      button.x + button.width / 2,
-      button.y + button.height / 2
-    );
   }
 }
 
+function getFlashProgress(now) {
+  if (phase !== "expectativa" || expectationStage !== "flash") return 0;
+  if (expectationFlashStart === null) return 0;
+
+  const elapsed = (now - expectationFlashStart) / 1000;
+  return Math.min(1, elapsed / expectationFlashDuration);
+}
+
+function getFlashPower(now) {
+  const progress = getFlashProgress(now);
+  if (progress <= 0) return 0;
+
+  const fadeIn = Math.min(1, progress / 0.18);
+  const fadeOut = 1 - Math.max(0, (progress - 0.72) / 0.28);
+  const pulse = 0.78 + Math.sin(now * 0.018) * 0.22;
+
+  return Math.max(0, Math.min(fadeIn, fadeOut)) * pulse;
+}
+
 function drawBackground() {
-  const red = Math.floor(4 + 18 * anxietyMix + 8 * expectationMix);
-  const blue = Math.floor(4 + 18 * expectationMix);
+  const stage = getStage();
+  const flashBase = expectationStage === "flash" ? 0.16 : 0;
+
+  const red = Math.floor(4 + 18 * anxietyMix + 8 * expectationMix + 18 * flashBase);
+  const blue = Math.floor(4 + 18 * expectationMix + 14 * flashBase);
 
   ctx.fillStyle = `rgb(${red}, 2, ${blue})`;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
 
-  const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
 
-  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, canvas.width);
+  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, stage.width);
 
-  gradient.addColorStop(0, `rgba(80, 0, 10, ${0.11 * anxietyMix})`);
-  gradient.addColorStop(0.45, `rgba(34, 0, 22, ${0.2 * expectationMix})`);
+  gradient.addColorStop(0, `rgba(80, 0, 10, ${0.11 * anxietyMix + 0.16 * flashBase})`);
+  gradient.addColorStop(0.45, `rgba(34, 0, 22, ${0.2 * expectationMix + 0.1 * flashBase})`);
   gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
 
   ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
 }
 
 function drawTunnel(now) {
-  const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
+  const stage = getStage();
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
   const fade = 1 - expectationMix;
 
   ctx.strokeStyle = `rgba(170, 24, 34, ${
@@ -367,11 +532,12 @@ function drawTunnel(now) {
   ctx.lineWidth = 1 + anxietyMix * 0.35;
 
   const total = 40;
+  const reach = Math.max(stage.width, stage.height);
 
   for (let i = 0; i < total; i++) {
     const angle = ((Math.PI * 2) / total) * i;
-    const x = cx + Math.cos(angle) * canvas.width;
-    const y = cy + Math.sin(angle) * canvas.height;
+    const x = cx + Math.cos(angle) * reach;
+    const y = cy + Math.sin(angle) * reach;
 
     ctx.beginPath();
     ctx.moveTo(cx, cy);
@@ -381,6 +547,9 @@ function drawTunnel(now) {
 }
 
 function drawShapes(now) {
+  const stage = getStage();
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
   const opacity = 0.86 - expectationMix * 0.58;
 
   ctx.fillStyle = `rgba(255, ${120 - 42 * anxietyMix}, ${
@@ -391,8 +560,10 @@ function drawShapes(now) {
   ctx.shadowBlur = speed + 3 * anxietyMix;
 
   for (const s of shapes) {
-    if (phase === "expectativa") {
+    if (phase === "expectativa" && expectationStage === "final") {
       s.z += speed * 4.2;
+    } else if (phase === "expectativa" && expectationStage === "flash") {
+      s.z += 0.6;
     } else {
       s.z -= speed;
     }
@@ -400,7 +571,7 @@ function drawShapes(now) {
     if (s.z <= 1 || s.z > 3500) {
       resetShape(s);
 
-      if (phase === "expectativa") {
+      if (phase === "expectativa" && expectationStage === "final") {
         s.z = 450 + Math.random() * 1000;
       }
 
@@ -408,8 +579,8 @@ function drawShapes(now) {
     }
 
     const scale = 500 / s.z;
-    let px = canvas.width / 2 + s.x * scale;
-    let py = canvas.height / 2 + s.y * scale;
+    let px = cx + s.x * scale;
+    let py = cy + s.y * scale;
     const size = Math.max(1, 12 * scale);
 
     const shakePower = anxietyMix * (1 - expectationMix);
@@ -433,10 +604,11 @@ function drawShapes(now) {
 function drawAnxietyRays(now) {
   if (anxietyMix <= 0 || expectationMix > 0.04) return;
 
-  const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
+  const stage = getStage();
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
   const rays = 16;
-  const maxLength = Math.max(canvas.width, canvas.height) * 0.36;
+  const maxLength = Math.max(stage.width, stage.height) * 0.36;
 
   ctx.save();
   ctx.translate(cx, cy);
@@ -460,16 +632,16 @@ function drawAnxietyRays(now) {
 }
 
 function drawArrivalBurst(now) {
-  if (expectationStart === null) return;
+  const flashPower = getFlashPower(now);
+  const finalBurst = phase === "expectativa" && expectationStage === "final" && expectationMix < 0.35;
 
-  const elapsed = (now - expectationStart) / 1000;
-  const burst = Math.max(0, 1 - elapsed / 1.5);
+  if (flashPower <= 0 && !finalBurst) return;
 
-  if (burst <= 0) return;
-
-  const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
-  const maxLength = Math.max(canvas.width, canvas.height) * 0.72;
+  const stage = getStage();
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
+  const maxLength = Math.max(stage.width, stage.height) * 0.72;
+  const burst = Math.max(flashPower, finalBurst ? 1 - expectationMix * 2.5 : 0);
 
   ctx.save();
   ctx.translate(cx, cy);
@@ -479,12 +651,12 @@ function drawArrivalBurst(now) {
 
     if (localBurst <= 0) continue;
 
-    const start = 30 + (1 - localBurst) * 120;
+    const start = 26 + (1 - localBurst) * 110;
     const end = maxLength * ray.length;
 
     ctx.strokeStyle = `rgba(255, ${150 + 70 * localBurst}, ${
       150 + 70 * localBurst
-    }, ${0.18 * localBurst})`;
+    }, ${0.16 * localBurst})`;
 
     ctx.lineWidth = ray.width * localBurst;
 
@@ -500,11 +672,12 @@ function drawArrivalBurst(now) {
 function drawSolarSystem(now) {
   if (expectationMix <= 0) return;
 
-  const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
+  const stage = getStage();
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
 
   const orbitScale = isMobile ? 0.38 : 0.43;
-  const maxOrbit = Math.min(canvas.width, canvas.height) * orbitScale;
+  const maxOrbit = Math.min(stage.width, stage.height) * orbitScale;
   const reveal = Math.max(0, (expectationMix - 0.08) / 0.92);
 
   const zoomOut = 3.2 - reveal * 2.2;
@@ -562,8 +735,10 @@ function drawSolarSystem(now) {
 }
 
 function drawLight(now) {
-  const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
+  const stage = getStage();
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
+  const flashPower = getFlashPower(now);
 
   glow += 0.03;
 
@@ -576,12 +751,14 @@ function drawLight(now) {
   const flicker =
     1 +
     anxietyMix * (1 - expectationMix) * (Math.sin(now * 0.035) * 0.035) +
-    expectationMix * (Math.sin(now * 0.008) * 0.015);
+    expectationMix * (Math.sin(now * 0.008) * 0.015) +
+    flashPower * (Math.sin(now * 0.03) * 0.08);
 
   const radius =
     38 * distantLight +
     62 * anxietyMix * (1 - expectationMix) +
     76 * expectationMix +
+    42 * flashPower +
     calmPulse * distantLight +
     anxiousPulse * anxietyMix * (1 - expectationMix) +
     stablePulse * expectationMix;
@@ -589,22 +766,25 @@ function drawLight(now) {
   const auraSize =
     150 * distantLight +
     230 * anxietyMix * (1 - expectationMix) +
-    340 * expectationMix;
+    340 * expectationMix +
+    260 * flashPower;
 
   const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, auraSize * flicker);
 
   gradient.addColorStop(0, "rgba(255,245,238,0.98)");
   gradient.addColorStop(
     0.16,
-    `rgba(255, ${110 + 55 * expectationMix}, ${
-      100 + 65 * expectationMix
-    }, ${0.72 + 0.14 * anxietyMix})`
+    `rgba(255, ${110 + 55 * expectationMix + 45 * flashPower}, ${
+      100 + 65 * expectationMix + 45 * flashPower
+    }, ${0.72 + 0.14 * anxietyMix + 0.1 * flashPower})`
   );
   gradient.addColorStop(
     0.46,
-    `rgba(${145 + 40 * anxietyMix}, ${22 + 28 * expectationMix}, ${
-      32 + 45 * expectationMix
-    }, ${0.22 + 0.12 * anxietyMix})`
+    `rgba(${145 + 40 * anxietyMix + 60 * flashPower}, ${
+      22 + 28 * expectationMix + 35 * flashPower
+    }, ${32 + 45 * expectationMix + 35 * flashPower}, ${
+      0.22 + 0.12 * anxietyMix + 0.18 * flashPower
+    })`
   );
   gradient.addColorStop(1, "rgba(0,0,0,0)");
 
@@ -622,13 +802,12 @@ function drawLight(now) {
 }
 
 function drawFlash(now) {
-  if (expectationStart === null) return;
+  const flashPower = getFlashPower(now);
 
-  const elapsed = (now - expectationStart) / 1000;
-  const flash = Math.max(0, 1 - elapsed / 0.9);
+  if (flashPower <= 0) return;
 
-  if (flash <= 0) return;
+  const stage = getStage();
 
-  ctx.fillStyle = `rgba(255, 238, 230, ${0.22 * flash})`;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = `rgba(255, 238, 230, ${0.26 * flashPower})`;
+  ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
 }
