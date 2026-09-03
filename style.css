@@ -92,11 +92,28 @@ canvas {
 
 .grid {
   display: grid;
-  /* Siempre 3x3 (9 celdas), en cualquier tamaño de pantalla,
-     para que entren sin necesidad de scrollear hacia abajo.
-     El tamaño de cada celda lo da el ancho de .home-wrap. */
+  /* Desktop/tablet: siempre 3x3 (9 celdas), para que entren
+     sin necesidad de scrollear hacia abajo. El tamaño de cada
+     celda lo da el ancho de .home-wrap. En mobile pasan a
+     mostrarse en una sola columna (ver media query abajo). */
   grid-template-columns: repeat(3, 1fr);
   gap: clamp(8px, 2vw, 14px);
+}
+
+/* ------------------------------------
+   Lobby responsive en mobile: en vez de
+   3x3, se muestran de a una fila por
+   experiencia (una debajo de la otra).
+------------------------------------ */
+@media (max-width: 600px) {
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .cell {
+    aspect-ratio: 16 / 9;
+  }
 }
 
 .cell {
