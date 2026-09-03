@@ -23,11 +23,21 @@ let lastTap = 0;
 const aggressiveThreshold = 220;
 
 const memoryMarks = [];
+const memoryTrails = [];
+const memoryFlashes = [];
 const heritageLevels = [];
 const decayFigures = [];
 
 let totalHeritageNodes = 0;
 let buttons = [];
+
+// Estado del gesto "mantener apretado" de Memoria (viene del
+// sketch de Processing: la duración de la presión define el
+// tamaño de la marca y si deja destello permanente).
+let pressingMemory = false;
+let memoryPressStart = 0;
+let pointerX = 0;
+let pointerY = 0;
 
 resize();
 
@@ -35,7 +45,18 @@ resize();
 // Interacción
 //------------------------------------
 canvas.addEventListener("mousedown", (e) => {
-  handleInput(e.clientX, e.clientY);
+  pointerX = e.clientX;
+  pointerY = e.clientY;
+  handlePressStart(e.clientX, e.clientY);
+});
+
+window.addEventListener("mousemove", (e) => {
+  pointerX = e.clientX;
+  pointerY = e.clientY;
+});
+
+window.addEventListener("mouseup", () => {
+  handlePressEnd();
 });
 
 canvas.addEventListener(
@@ -43,10 +64,27 @@ canvas.addEventListener(
   (e) => {
     e.preventDefault();
     const touch = e.touches[0];
-    handleInput(touch.clientX, touch.clientY);
+    pointerX = touch.clientX;
+    pointerY = touch.clientY;
+    handlePressStart(touch.clientX, touch.clientY);
   },
   { passive: false }
 );
+
+canvas.addEventListener(
+  "touchmove",
+  (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    pointerX = touch.clientX;
+    pointerY = touch.clientY;
+  },
+  { passive: false }
+);
+
+window.addEventListener("touchend", () => {
+  handlePressEnd();
+});
 
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
@@ -62,15 +100,17 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-function handleInput(x, y) {
-  if (checkButtons(x, y)) return;
+function handlePressStart(x, y) {
+  if (!isMini && checkButtons(x, y)) return;
 
   const now = performance.now();
   const aggressive = now - lastTap < aggressiveThreshold;
   lastTap = now;
 
   if (currentSystem === "memoria") {
-    memoryMarks.push(new MemoryMark(x, y));
+    pressingMemory = true;
+    memoryPressStart = now;
+    return;
   }
 
   if (currentSystem === "herencia") {
@@ -85,6 +125,29 @@ function handleInput(x, y) {
 
     decayFigures.push(new DecayFigure(x, y, size, type, color, life));
   }
+}
+
+function handlePressEnd() {
+  if (!pressingMemory) return;
+  pressingMemory = false;
+
+  if (currentSystem !== "memoria") return;
+
+  addMemoryMark(pointerX, pointerY, performance.now() - memoryPressStart);
+}
+
+// Crea la nueva marca en (x, y) y, si había una marca previa,
+// el rastro (línea) que las conecta. "duracion" es cuánto se
+// mantuvo apretado, en ms.
+function addMemoryMark(x, y, duracion) {
+  const nueva = new MemoryMark(x, y, duracion);
+
+  if (memoryMarks.length > 0) {
+    const anterior = memoryMarks[memoryMarks.length - 1];
+    memoryTrails.push(new MemoryTrail(anterior.x, anterior.y, nueva.x, nueva.y, duracion));
+  }
+
+  memoryMarks.push(nueva);
 }
 
 //------------------------------------
@@ -160,7 +223,58 @@ function animate(now) {
   if (currentSystem === "caducidad") drawDecay();
 
   drawFrame();
-  drawButtons();
+  if (!isMini) drawButtons();
+}
+
+//------------------------------------
+// Entrada directa por parámetro de URL (?estado=)
+//------------------------------------
+const urlParams = new URLSearchParams(window.location.search);
+const estadoInicial = urlParams.get("estado");
+
+if (["memoria", "herencia", "caducidad"].includes(estadoInicial)) {
+  currentSystem = estadoInicial;
+}
+
+//------------------------------------
+// Modo miniatura (?mini=1)
+// Oculta los botones y simula clicks automáticos
+// usando exactamente el mismo handlePressStart()/handlePressEnd()
+// que dispara una presión real, para que se vea el
+// comportamiento sin necesidad de interacción.
+//------------------------------------
+const isMini = urlParams.get("mini") === "1";
+
+if (isMini) {
+  // El ritmo de los clicks simulados se ajusta desde mini-sim-config.js
+  // (window.MINI_SIM_CONFIG.click), no acá.
+  const clickCfg = (window.MINI_SIM_CONFIG && window.MINI_SIM_CONFIG.click) || {};
+  const clickIntervalMin = clickCfg.intervalMin ?? 5000;
+  const clickIntervalMax = clickCfg.intervalMax ?? 6000;
+
+  function scheduleMiniClick() {
+    const wait = random(clickIntervalMin, clickIntervalMax);
+
+    setTimeout(() => {
+      if (!(currentSystem === "memoria" && memoryMarks.length >= 40)) {
+        const x = random(40, window.innerWidth - 40);
+        const y = random(40, window.innerHeight - 40);
+        pointerX = x;
+        pointerY = y;
+
+        handlePressStart(x, y);
+
+        // En Memoria simula que se mantiene apretado un rato
+        // (variable, como una persona real) antes de soltar.
+        const holdMs = currentSystem === "memoria" ? random(80, 2600) : 0;
+        setTimeout(() => handlePressEnd(), holdMs);
+      }
+
+      scheduleMiniClick();
+    }, wait);
+  }
+
+  scheduleMiniClick();
 }
 
 requestAnimationFrame(animate);
@@ -199,17 +313,24 @@ function drawFrame() {
 // 1. Memoria
 //------------------------------------
 class MemoryMark {
-  constructor(x, y) {
+  constructor(x, y, duracion = 0) {
     this.x = x;
     this.y = y;
-    this.size = random(18, 45);
+
+    // Duración de la presión (ms) → tamaño del círculo.
+    this.size = clampNum(mapRange(duracion, 0, 5000, 18, 80), 18, 80);
     this.alpha = 180;
-    this.minAlpha = 32;
+    this.minAlpha = 0;
+
+    // Presiones sostenidas (300ms o más) dejan un destello
+    // permanente una vez que el círculo termina de desvanecerse.
+    this.dejaDestello = duracion >= 300;
+    this.intensidadDestello = clampNum(mapRange(duracion, 300, 5000, 50, 255), 50, 255);
   }
 
   update() {
     if (this.alpha > this.minAlpha) {
-      this.alpha -= 0.35;
+      this.alpha -= 0.5;
     }
   }
 
@@ -234,25 +355,88 @@ class MemoryMark {
   }
 }
 
+// Rastro: la línea que conecta una marca con la siguiente.
+// Nunca desaparece; cuanto más se sostuvo la presión, más
+// marcada queda.
+class MemoryTrail {
+  constructor(x1, y1, x2, y2, duracion) {
+    this.x1 = x1;
+    this.y1 = y1;
+    this.x2 = x2;
+    this.y2 = y2;
+    this.alpha = clampNum(mapRange(duracion, 0, 5000, 25, 255), 25, 255);
+  }
+
+  show() {
+    const a = this.alpha / 255;
+
+    ctx.strokeStyle = `rgba(223, 187, 145, ${a})`;
+    ctx.lineWidth = 4;
+
+    ctx.beginPath();
+    ctx.moveTo(this.x1, this.y1);
+    ctx.lineTo(this.x2, this.y2);
+    ctx.stroke();
+  }
+}
+
+// Destello: lo que queda para siempre en el lugar donde una
+// marca "importante" (presión sostenida) terminó de desvanecerse.
+class MemoryFlash {
+  constructor(x, y, intensidad) {
+    this.x = x;
+    this.y = y;
+    this.alpha = intensidad;
+  }
+
+  show() {
+    const a = this.alpha / 255;
+
+    ctx.save();
+    ctx.fillStyle = `rgba(255, 191, 117, ${a * 0.12})`;
+    circle(this.x, this.y, 25);
+
+    ctx.fillStyle = `rgba(255, 220, 170, ${a})`;
+    circle(this.x, this.y, 5);
+    ctx.restore();
+  }
+}
+
 function drawMemory() {
   ctx.save();
 
-  ctx.strokeStyle = "rgba(223, 187, 145, 0.16)";
-  ctx.lineWidth = 1;
-
-  for (let i = 1; i < memoryMarks.length; i++) {
-    const a = memoryMarks[i - 1];
-    const b = memoryMarks[i];
-
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
+  for (const flash of memoryFlashes) {
+    flash.show();
   }
 
-  for (const mark of memoryMarks) {
+  for (const trail of memoryTrails) {
+    trail.show();
+  }
+
+  for (let i = memoryMarks.length - 1; i >= 0; i--) {
+    const mark = memoryMarks[i];
     mark.update();
     mark.show();
+
+    if (mark.alpha <= 0) {
+      if (mark.dejaDestello) {
+        memoryFlashes.push(new MemoryFlash(mark.x, mark.y, mark.intensidadDestello));
+      }
+      memoryMarks.splice(i, 1);
+    }
+  }
+
+  // Círculo "cargando" mientras se mantiene apretado: sigue
+  // al puntero y crece con la duración de la presión.
+  if (currentSystem === "memoria" && pressingMemory) {
+    const duracion = performance.now() - memoryPressStart;
+    const tam = clampNum(mapRange(duracion, 0, 5000, 18, 80), 18, 80);
+
+    ctx.strokeStyle = "rgba(211, 119, 13, 0.39)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(pointerX, pointerY, tam / 2, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   ctx.restore();
@@ -555,6 +739,16 @@ function roundedRect(x, y, w, h, r) {
 
 function random(min, max) {
   return Math.random() * (max - min) + min;
+}
+
+// Equivalentes a map()/constrain() de Processing.
+function mapRange(value, inMin, inMax, outMin, outMax) {
+  const t = (value - inMin) / (inMax - inMin);
+  return outMin + t * (outMax - outMin);
+}
+
+function clampNum(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function randomFrom(arr) {

@@ -6,19 +6,74 @@
   <title>Experiencias</title>
   <link rel="stylesheet" href="style.css" />
 </head>
-<body class="menu">
-  <main class="lobby">
-    <a href="subsistema1.html" class="lobby-btn">
-      Subsistema1
-    </a>
+<body class="home">
+  <main class="home-wrap">
+    <h1 class="home-title">Experiencias</h1>
+    <p class="home-subtitle">Elegí un estado para entrar directamente en él</p>
 
-    <a href="subsistema2.html" class="lobby-btn">
-      Subsistema2
-    </a>
+    <div class="grid" id="grid">
+      <!-- Subsistema 1 -->
+      <a class="cell" href="subsistema1.html?estado=memoria">
+        <div class="cell-frame-wrap">
+          <iframe src="subsistema1.html?estado=memoria&mini=1" tabindex="-1" loading="lazy"></iframe>
+        </div>
+        <span class="cell-label">Memoria</span>
+      </a>
+      <a class="cell" href="subsistema1.html?estado=herencia">
+        <div class="cell-frame-wrap">
+          <iframe src="subsistema1.html?estado=herencia&mini=1" tabindex="-1" loading="lazy"></iframe>
+        </div>
+        <span class="cell-label">Herencia</span>
+      </a>
+      <a class="cell" href="subsistema1.html?estado=caducidad">
+        <div class="cell-frame-wrap">
+          <iframe src="subsistema1.html?estado=caducidad&mini=1" tabindex="-1" loading="lazy"></iframe>
+        </div>
+        <span class="cell-label">Caducidad</span>
+      </a>
 
-    <a href="subsistema3.html" class="lobby-btn">
-      Subsistema3
-    </a>
+      <!-- Subsistema 2 -->
+      <a class="cell" href="subsistema2.html?estado=sinergias">
+        <div class="cell-frame-wrap">
+          <iframe src="subsistema2.html?estado=sinergias&mini=1" tabindex="-1" loading="lazy"></iframe>
+        </div>
+        <span class="cell-label">Colaboración</span>
+      </a>
+      <a class="cell" href="subsistema2.html?estado=ramas">
+        <div class="cell-frame-wrap">
+          <iframe src="subsistema2.html?estado=ramas&mini=1" tabindex="-1" loading="lazy"></iframe>
+        </div>
+        <span class="cell-label">Empatía</span>
+      </a>
+      <a class="cell" href="subsistema2.html?estado=ruptura">
+        <div class="cell-frame-wrap">
+          <iframe src="subsistema2.html?estado=ruptura&mini=1" tabindex="-1" loading="lazy"></iframe>
+        </div>
+        <span class="cell-label">Identidad</span>
+      </a>
+
+      <!-- Subsistema 3 -->
+      <a class="cell" href="subsistema3.html?estado=incertidumbre">
+        <div class="cell-frame-wrap">
+          <iframe src="subsistema3.html?estado=incertidumbre&mini=1" tabindex="-1" loading="lazy"></iframe>
+        </div>
+        <span class="cell-label">Incertidumbre</span>
+      </a>
+      <a class="cell" href="subsistema3.html?estado=ansiedad">
+        <div class="cell-frame-wrap">
+          <iframe src="subsistema3.html?estado=ansiedad&mini=1" tabindex="-1" loading="lazy"></iframe>
+        </div>
+        <span class="cell-label">Ansiedad</span>
+      </a>
+      <a class="cell" href="subsistema3.html?estado=expectativa">
+        <div class="cell-frame-wrap">
+          <iframe src="subsistema3.html?estado=expectativa&mini=1" tabindex="-1" loading="lazy"></iframe>
+        </div>
+        <span class="cell-label">Expectativa</span>
+      </a>
+    </div>
   </main>
+
+  <script src="home.js"></script>
 </body>
 </html>

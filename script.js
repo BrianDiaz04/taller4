@@ -35,18 +35,62 @@ const planets = [];
 const burstRays = [];
 let lobbyButtons = [];
 
+// Anomalías raras en las figuras que avanzan durante
+// "incertidumbre": los primeros 10s todo se comporta normal.
+// Después, cada tanto se tira una moneda cargada (2/5) para
+// ver si a un grupo de figuras le pasa algo raro un rato.
+let phaseStartTime = 0;
+let nextAnomalyCheckAt = 0;
+
+// Anomalía "todas se van al costado": chequeo aparte, más
+// difícil de dar. Cada 20s exactos se tira una moneda 50/50,
+// pero SOLO cuenta si en ese instante se está manteniendo
+// presionado (deslizando). Si no se está presionando en ese
+// momento puntual, se pierde esa chance y hay que esperar
+// otros 20s.
+let nextSidewaysAllCheckAt = 0;
+
 resize();
 
 canvas.addEventListener("mousedown", (e) => {
   if (handleLobbySelection(e.clientX, e.clientY)) return;
   if (inLobby) return;
 
+  // En desktop se mantiene el click sostenido como equivalente
+  // del gesto táctil (no hay "deslizar" real con mouse).
   accelerating = true;
 });
 
 window.addEventListener("mouseup", () => {
   accelerating = false;
 });
+
+//------------------------------------
+// Touch: hace falta DESLIZAR hacia arriba para avanzar, no
+// alcanza con tocar y quedarse quieto. Se seguí el movimiento
+// del dedo entre cada touchmove: si viene subiendo, avanza; si
+// se queda quieto o baja, un pequeño timer de inactividad corta
+// el impulso enseguida (no hace falta levantar el dedo).
+//------------------------------------
+let touchLastY = null;
+let touchIdleTimer = null;
+
+const swipeUpThreshold = 2; // px mínimos de movimiento hacia arriba para contar
+const swipeIdleMs = 160; // sin nuevo movimiento hacia arriba en este lapso, se corta
+
+function clearSwipeIdleTimer() {
+  if (touchIdleTimer) {
+    clearTimeout(touchIdleTimer);
+    touchIdleTimer = null;
+  }
+}
+
+function armSwipeIdleTimer() {
+  clearSwipeIdleTimer();
+  touchIdleTimer = setTimeout(() => {
+    accelerating = false;
+  }, swipeIdleMs);
+}
 
 canvas.addEventListener(
   "touchstart",
@@ -58,17 +102,47 @@ canvas.addEventListener(
     if (handleLobbySelection(touch.clientX, touch.clientY)) return;
     if (inLobby) return;
 
-    accelerating = true;
+    touchLastY = touch.clientY;
+
+    // Tocar por sí solo no avanza nada; hace falta deslizar.
+    accelerating = false;
+    clearSwipeIdleTimer();
+  },
+  { passive: false }
+);
+
+canvas.addEventListener(
+  "touchmove",
+  (e) => {
+    if (inLobby || touchLastY === null) return;
+
+    e.preventDefault();
+
+    const touch = e.touches[0];
+    const deltaY = touchLastY - touch.clientY; // positivo = dedo subiendo
+    touchLastY = touch.clientY;
+
+    if (deltaY > swipeUpThreshold) {
+      accelerating = true;
+      armSwipeIdleTimer();
+    }
+    // Si desliza hacia abajo o casi no se mueve, no reactivamos:
+    // el timer de inactividad corta el impulso solo si dejó de
+    // venir movimiento hacia arriba.
   },
   { passive: false }
 );
 
 window.addEventListener("touchend", () => {
   accelerating = false;
+  touchLastY = null;
+  clearSwipeIdleTimer();
 });
 
 window.addEventListener("touchcancel", () => {
   accelerating = false;
+  touchLastY = null;
+  clearSwipeIdleTimer();
 });
 
 window.addEventListener("keydown", (e) => {
@@ -152,6 +226,10 @@ function startPhase(selectedPhase) {
   expectationHoldTime = 0;
   expectationStage = "approach";
   expectationFlashStart = null;
+
+  phaseStartTime = performance.now();
+  nextAnomalyCheckAt = 0;
+  nextSidewaysAllCheckAt = 0;
 
   speed = 2;
 
@@ -262,6 +340,7 @@ function resetShape(s) {
   s.z = Math.random() * 2100 + 350;
   s.type = Math.random() < 0.5 ? "square" : "triangle";
   s.shake = Math.random() * Math.PI * 2;
+  s.anomaly = null;
 }
 
 const shapeCount = isMobile ? 90 : 150;
@@ -323,7 +402,7 @@ function animate(now = performance.now()) {
     ctx.restore();
 
     drawStageFrame();
-    drawPhaseButtons();
+    if (!isMini) drawPhaseButtons();
     return;
   }
 
@@ -344,7 +423,64 @@ function animate(now = performance.now()) {
   ctx.restore();
 
   drawStageFrame();
-  drawPhaseButtons();
+  if (!isMini) drawPhaseButtons();
+}
+
+//------------------------------------
+// Entrada directa por parámetro de URL (?estado=)
+//------------------------------------
+const urlParams = new URLSearchParams(window.location.search);
+const estadoInicial = urlParams.get("estado");
+
+if (["incertidumbre", "ansiedad", "expectativa"].includes(estadoInicial)) {
+  startPhase(estadoInicial);
+}
+
+//------------------------------------
+// Modo miniatura (?mini=1)
+// Oculta los botones. A diferencia de los otros dos
+// subsistemas, la interacción real de este no es un click
+// sino un drag/touch SOSTENIDO hacia arriba (mantener
+// presionado para acelerar). Por eso, en vez de simular un
+// tap puntual, se simula ese mismo gesto: se mantiene
+// "accelerating" en true durante un rato y después se suelta.
+// "accelerating" es la misma variable que activa mousedown /
+// touchstart, así que el resultado es idéntico al de un dedo
+// real sosteniendo el drag.
+//
+// El ritmo (cada cuánto arranca un drag y cuánto se sostiene)
+// se ajusta desde mini-sim-config.js (window.MINI_SIM_CONFIG.drag),
+// no acá.
+//------------------------------------
+const isMini = urlParams.get("mini") === "1";
+
+if (isMini) {
+  const dragCfg = (window.MINI_SIM_CONFIG && window.MINI_SIM_CONFIG.drag) || {};
+  const dragIntervalMin = dragCfg.intervalMin ?? 5000;
+  const dragIntervalMax = dragCfg.intervalMax ?? 6000;
+  const dragHoldMin = dragCfg.holdDurationMin ?? 1800;
+  const dragHoldMax = dragCfg.holdDurationMax ?? 2600;
+
+  function scheduleMiniDrag() {
+    const wait = miniRandomRange(dragIntervalMin, dragIntervalMax);
+
+    setTimeout(() => {
+      accelerating = true; // "dedo" apoyado y arrastrando hacia arriba
+
+      const holdDuration = miniRandomRange(dragHoldMin, dragHoldMax);
+
+      setTimeout(() => {
+        accelerating = false; // se suelta el drag
+        scheduleMiniDrag();
+      }, holdDuration);
+    }, wait);
+  }
+
+  scheduleMiniDrag();
+}
+
+function miniRandomRange(min, max) {
+  return Math.random() * (max - min) + min;
 }
 
 animate();
@@ -353,6 +489,23 @@ function updatePhase(delta, now) {
   if (phase === "incertidumbre") {
     anxietyMix += (0 - anxietyMix) * 0.04;
     expectationMix += (0 - expectationMix) * 0.04;
+
+    if (now - phaseStartTime >= 10000 && now >= nextAnomalyCheckAt) {
+      nextAnomalyCheckAt = now + 2200 + Math.random() * 2400;
+
+      if (Math.random() < 0.48) {
+        triggerShapeAnomaly(now);
+      }
+    }
+
+    if (now - phaseStartTime >= 10000 && now >= nextSidewaysAllCheckAt) {
+      nextSidewaysAllCheckAt = now + 20000;
+
+      if (accelerating && Math.random() < 0.5) {
+        triggerSidewaysAllAnomaly(now);
+      }
+    }
+
     return;
   }
 
@@ -546,6 +699,45 @@ function drawTunnel(now) {
   }
 }
 
+function triggerShapeAnomaly(now) {
+  const candidates = shapes.filter((s) => !s.anomaly);
+  if (candidates.length === 0) return;
+
+  const types = ["grow", "shrink", "reverse", "color"];
+  const type = types[Math.floor(Math.random() * types.length)];
+
+  // "reverse" y "color" se notan más si les pasa a varias figuras
+  // a la vez (2 a 4), no a una sola. El resto sigue afectando
+  // a una única figura por evento.
+  const affectsGroup = type === "reverse" || type === "color";
+  const count = affectsGroup ? 2 + Math.floor(Math.random() * 3) : 1;
+
+  const pool = candidates.slice();
+
+  for (let i = 0; i < count && pool.length > 0; i++) {
+    const index = Math.floor(Math.random() * pool.length);
+    const s = pool.splice(index, 1)[0];
+
+    s.anomaly = {
+      type,
+      start: now,
+      duration: 1500 + Math.random() * 1800,
+      sideDir: Math.random() < 0.5 ? -1 : 1
+    };
+  }
+}
+
+function triggerSidewaysAllAnomaly(now) {
+  for (const s of shapes) {
+    s.anomaly = {
+      type: "sidewaysAll",
+      start: now,
+      duration: 1500 + Math.random() * 1800,
+      sideDir: Math.random() < 0.5 ? -1 : 1
+    };
+  }
+}
+
 function drawShapes(now) {
   const stage = getStage();
   const cx = stage.x + stage.width / 2;
@@ -560,12 +752,35 @@ function drawShapes(now) {
   ctx.shadowBlur = speed + 3 * anxietyMix;
 
   for (const s of shapes) {
+    let anomalyStrength = 0;
+
+    if (s.anomaly) {
+      const aElapsed = now - s.anomaly.start;
+
+      if (aElapsed > s.anomaly.duration) {
+        s.anomaly = null;
+      } else {
+        const at = aElapsed / s.anomaly.duration;
+        const fadeIn = Math.min(1, at / 0.25);
+        const fadeOut = 1 - Math.max(0, (at - 0.7) / 0.3);
+        anomalyStrength = Math.max(0, Math.min(fadeIn, fadeOut));
+      }
+    }
+
     if (phase === "expectativa" && expectationStage === "final") {
       s.z += speed * 4.2;
     } else if (phase === "expectativa" && expectationStage === "flash") {
       s.z += 0.6;
+    } else if (s.anomaly && s.anomaly.type === "reverse") {
+      // en vez de avanzar, retrocede un rato
+      s.z += speed * (1 + anomalyStrength * 1.6);
     } else {
       s.z -= speed;
+    }
+
+    if (s.anomaly && (s.anomaly.type === "sideways" || s.anomaly.type === "sidewaysAll")) {
+      // deriva lateral, se va a un costado
+      s.x += s.anomaly.sideDir * (2.4 + speed * 0.6) * anomalyStrength;
     }
 
     if (s.z <= 1 || s.z > 3500) {
@@ -581,7 +796,13 @@ function drawShapes(now) {
     const scale = 500 / s.z;
     let px = cx + s.x * scale;
     let py = cy + s.y * scale;
-    const size = Math.max(1, 12 * scale);
+    let size = Math.max(1, 12 * scale);
+
+    if (s.anomaly && s.anomaly.type === "grow") {
+      size *= 1 + anomalyStrength * 2.2;
+    } else if (s.anomaly && s.anomaly.type === "shrink") {
+      size = Math.max(0.6, size * (1 - anomalyStrength * 0.75));
+    }
 
     const shakePower = anxietyMix * (1 - expectationMix);
 
@@ -591,10 +812,22 @@ function drawShapes(now) {
       py += Math.cos(now * 0.036 + s.shake) * shakeAmount;
     }
 
+    const isColorAnomaly = s.anomaly && s.anomaly.type === "color" && anomalyStrength > 0;
+
+    if (isColorAnomaly) {
+      ctx.save();
+      ctx.fillStyle = `rgba(120, 200, 255, ${0.72 * anomalyStrength + 0.18})`;
+      ctx.shadowColor = "#78c8ff";
+    }
+
     if (s.type === "square") {
       ctx.fillRect(px - size / 2, py - size / 2, size, size);
     } else {
       drawTriangle(px, py, size / 2);
+    }
+
+    if (isColorAnomaly) {
+      ctx.restore();
     }
   }
 

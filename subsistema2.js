@@ -176,6 +176,36 @@ function drawBaseBackground(glow = 0) {
 }
 
 //------------------------------------
+// "Escenario" (zona con margen donde
+// pasa todo el contenido interactivo),
+// igual que subsistema.js (drawFrame)
+// y script.js (getStage/drawStageFrame).
+//------------------------------------
+function getStage() {
+  const isMobile = W < 768;
+  const margin = isMobile ? 20 : 40;
+  const top = isMobile ? 64 : 76;
+  const bottom = isMobile ? 20 : 40;
+
+  return {
+    x: margin,
+    y: top,
+    width: W - margin * 2,
+    height: H - top - bottom
+  };
+}
+
+function drawStageFrame() {
+  const stage = getStage();
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 205, 200, 0.28)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(stage.x, stage.y, stage.width, stage.height);
+  ctx.restore();
+}
+
+//------------------------------------
 // 1. Sinergias Colectivas
 //------------------------------------
 const synergy = {
@@ -243,14 +273,20 @@ class SynergyShape {
         this.vel.y = 0;
       }
     } else if (!this.grouped) {
+      const stage = getStage();
+      const left = stage.x + 20;
+      const right = stage.x + stage.width - 20;
+      const top = stage.y + 15;
+      const bottom = stage.y + stage.height - 20;
+
       this.pos.x += this.vel.x + Math.sin(frame * 0.015 + this.seed) * 0.15;
       this.pos.y += this.vel.y + Math.cos(frame * 0.015 + this.seed) * 0.15;
 
-      if (this.pos.x < 50 || this.pos.x > W - 50) this.vel.x *= -1;
-      if (this.pos.y < 85 || this.pos.y > H - 50) this.vel.y *= -1;
+      if (this.pos.x < left || this.pos.x > right) this.vel.x *= -1;
+      if (this.pos.y < top || this.pos.y > bottom) this.vel.y *= -1;
 
-      this.pos.x = clamp(this.pos.x, 30, W - 30);
-      this.pos.y = clamp(this.pos.y, 70, H - 30);
+      this.pos.x = clamp(this.pos.x, stage.x, stage.x + stage.width);
+      this.pos.y = clamp(this.pos.y, stage.y, stage.y + stage.height);
     }
   }
 
@@ -339,9 +375,15 @@ function initSynergy() {
   synergy.globalGlow = 0;
   synergy.nextGroupId = 0;
 
-  for (let i = 0; i < 8; i++) synergy.shapes.push(new SynergyShape(0, random(100, W - 100), random(100, H - 100)));
-  for (let i = 0; i < 6; i++) synergy.shapes.push(new SynergyShape(1, random(100, W - 100), random(100, H - 100)));
-  for (let i = 0; i < 4; i++) synergy.shapes.push(new SynergyShape(2, random(100, W - 100), random(100, H - 100)));
+  const stage = getStage();
+  const sx0 = stage.x + 60;
+  const sx1 = stage.x + stage.width - 60;
+  const sy0 = stage.y + 60;
+  const sy1 = stage.y + stage.height - 60;
+
+  for (let i = 0; i < 8; i++) synergy.shapes.push(new SynergyShape(0, random(sx0, sx1), random(sy0, sy1)));
+  for (let i = 0; i < 6; i++) synergy.shapes.push(new SynergyShape(1, random(sx0, sx1), random(sy0, sy1)));
+  for (let i = 0; i < 4; i++) synergy.shapes.push(new SynergyShape(2, random(sx0, sx1), random(sy0, sy1)));
 }
 
 function drawSynergy(frame) {
@@ -743,8 +785,11 @@ function initBranches() {
   branchesWork.squareActive = false;
   branchesWork.hueVal = 0;
   branchesWork.shakeIntensity = 0;
-  branchesWork.start = vec(50, 90);
-  branchesWork.end = vec(W - 50, H - 50);
+
+  const stage = getStage();
+  branchesWork.start = vec(stage.x + 20, stage.y + 20);
+  branchesWork.end = vec(stage.x + stage.width - 20, stage.y + stage.height - 20);
+
   branchesWork.state = 0;
   branchesWork.colorResetFactor = 1;
   branchesWork.hues = [];
@@ -1073,9 +1118,11 @@ class RuptureParticle {
 function initRupture() {
   rupture.squares = [];
   rupture.particles = [];
-  rupture.start = vec(80, 90);
-  rupture.end = vec(W - 80, H - 80);
-  rupture.breakPoint = vec(W / 2, H / 2);
+
+  const stage = getStage();
+  rupture.start = vec(stage.x + 30, stage.y + 20);
+  rupture.end = vec(stage.x + stage.width - 30, stage.y + stage.height - 20);
+  rupture.breakPoint = vec(stage.x + stage.width / 2, stage.y + stage.height / 2);
   rupture.targetPoint = vec(0, 0);
   rupture.newEnd = vec(0, 0);
   rupture.state = 0;
@@ -1134,7 +1181,12 @@ function drawRupture(frame, now) {
     s.update();
     s.display();
 
-    const out = s.pos.x < -50 || s.pos.x > W + 50 || s.pos.y < -50 || s.pos.y > H + 50;
+    const stage = getStage();
+    const out =
+      s.pos.x < stage.x - 80 ||
+      s.pos.x > stage.x + stage.width + 80 ||
+      s.pos.y < stage.y - 80 ||
+      s.pos.y > stage.y + stage.height + 80;
     if (s.t >= 1 || out) rupture.squares.splice(i, 1);
   }
 
@@ -1233,6 +1285,94 @@ initSynergy();
 initBranches();
 initRupture();
 
+//------------------------------------
+// Entrada directa por parámetro de URL (?estado=)
+//------------------------------------
+const urlParams = new URLSearchParams(window.location.search);
+const estadoInicial = urlParams.get("estado");
+
+if (works.includes(estadoInicial)) {
+  currentWork = estadoInicial;
+}
+
+//------------------------------------
+// Modo miniatura (?mini=1)
+// Oculta los botones y simula la interacción
+// llamando a las mismas funciones que usa un
+// click/touch real (branchesTouch, ruptureMousePressed),
+// solo que disparadas por un timer en vez de la mano.
+//------------------------------------
+const isMini = urlParams.get("mini") === "1";
+
+if (isMini) {
+  // El ritmo de los clicks simulados se ajusta desde mini-sim-config.js
+  // (window.MINI_SIM_CONFIG.click), no acá.
+  const clickCfg = (window.MINI_SIM_CONFIG && window.MINI_SIM_CONFIG.click) || {};
+  const clickIntervalMin = clickCfg.intervalMin ?? 5000;
+  const clickIntervalMax = clickCfg.intervalMax ?? 6000;
+
+  // Sinergias ya se anima sola (sin necesidad de simular nada).
+
+  // Ramas: completa una rama nueva cada tanto (ritmo configurable)
+  function scheduleBranchClick() {
+    const wait = random(clickIntervalMin, clickIntervalMax);
+
+    setTimeout(() => {
+      if (currentWork === "ramas" && branchesWork.branches.length < 5) {
+        const stage = getStage();
+        const x = random(stage.x + 30, stage.x + stage.width - 30);
+        const y = random(stage.y + 30, stage.y + stage.height - 30);
+
+        branchesTouch(x, y); // define el punto de salida
+        setTimeout(() => branchesTouch(x, y), 180); // confirma la rama
+      }
+
+      scheduleBranchClick();
+    }, wait);
+  }
+
+  scheduleBranchClick();
+
+  // Ruptura: selecciona un cuadrado de la línea automáticamente
+  // (mismo ritmo configurable que el resto de los clicks)
+  function scheduleRuptureClick() {
+    const wait = random(clickIntervalMin, clickIntervalMax);
+
+    setTimeout(() => {
+      if (currentWork === "ruptura") {
+        if (rupture.state === 0 && rupture.squares.length > 0) {
+          const target = randomFrom(rupture.squares);
+          ruptureMousePressed(target.pos.x, target.pos.y);
+        } else if (rupture.state === 2) {
+          const angle = Math.random() * Math.PI * 2;
+          const tx = rupture.breakPoint.x + Math.cos(angle) * 220;
+          const ty = rupture.breakPoint.y + Math.sin(angle) * 220;
+          ruptureMousePressed(tx, ty);
+        }
+      }
+
+      scheduleRuptureClick();
+    }, wait);
+  }
+
+  scheduleRuptureClick();
+
+  // Ruptura: mientras está "agarrado" (state 1), simula el
+  // puntero temblando cerca del punto de quiebre -- es
+  // exactamente la condición que usa el código real para
+  // acumular el "shake" y disparar la ruptura. Esto no es un
+  // click nuevo sino la textura de un gesto ya en curso, así
+  // que mantiene su propio ritmo rápido y no usa la config.
+  setInterval(() => {
+    if (currentWork === "ruptura" && rupture.state === 1) {
+      pointer.px = pointer.x;
+      pointer.py = pointer.y;
+      pointer.x = rupture.breakPoint.x + random(-30, 30);
+      pointer.y = rupture.breakPoint.y + random(-30, 30);
+    }
+  }, 40);
+}
+
 let frame = 0;
 
 function animate(now = performance.now()) {
@@ -1243,7 +1383,8 @@ function animate(now = performance.now()) {
   if (currentWork === "ramas") drawBranches(frame);
   if (currentWork === "ruptura") drawRupture(frame, now);
 
-  drawButtons();
+  drawStageFrame();
+  if (!isMini) drawButtons();
 }
 
 animate();
