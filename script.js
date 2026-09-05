@@ -32,7 +32,7 @@ let anxietyHoldTime = 0;
 // se pierde el progreso, pero se suman 2 segundos más al tiempo total
 // necesario, como penalización por haber pausado.
 let expectationProgress = 0;
-let expectationRequiredSeconds = 12;
+let expectationRequiredSeconds = 8;
 let expectationRecoveryPending = false;
 let expectationExploded = false;
 let expectationExplosionTime = null;
@@ -318,7 +318,7 @@ function startPhase(selectedPhase) {
   anxietyHoldTime = 0;
 
   expectationProgress = 0;
-  expectationRequiredSeconds = 12;
+  expectationRequiredSeconds = 8;
   expectationRecoveryPending = false;
   expectationExploded = false;
   expectationExplosionTime = null;
@@ -1210,7 +1210,7 @@ function drawSolarSystemFloating(now) {
 }
 
 function getOrbitMaxRadius(stage) {
-  const orbitScale = isMobile ? 0.38 : 0.43;
+  const orbitScale = isMobile ? 0.42 : 0.43;
   return Math.min(stage.width, stage.height) * orbitScale;
 }
 
