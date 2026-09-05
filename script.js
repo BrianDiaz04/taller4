@@ -342,17 +342,22 @@ function startPhase(selectedPhase) {
 }
 
 function getStage() {
-  const margin = isMobile ? 18 : 40;
-  const top = isMobile ? 82 : 86;
+  const margin = isMobile ? 40 : 40;
+  const top = isMobile ? 76 : 86;
 
   // En mobile el ancho es mucho menor que el alto, así que si la
   // ventana ocupa todo el espacio disponible queda un rectángulo
   // muy alargado verticalmente y se ve raro. La hacemos cuadrada,
   // usando el lado más chico entre ancho y alto, y la centramos en
   // el espacio disponible. En escritorio no se toca nada.
+  // (En mobile usamos los mismos márgenes que el subsistema 1
+  // -margin 40, top 76, bottom 40- para que la ventana de
+  // interacción tenga el mismo tamaño y posición en todas las
+  // experiencias.)
   if (isMobile) {
+    const bottom = 40;
     const availWidth = canvas.width - margin * 2;
-    const availHeight = canvas.height - top - margin;
+    const availHeight = canvas.height - top - bottom;
     const side = Math.min(availWidth, availHeight);
 
     return {

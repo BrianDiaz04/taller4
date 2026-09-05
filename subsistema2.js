@@ -183,9 +183,13 @@ function drawBaseBackground(glow = 0) {
 //------------------------------------
 function getStage() {
   const isMobile = W < 768;
-  const margin = isMobile ? 20 : 40;
-  const top = isMobile ? 64 : 76;
-  const bottom = isMobile ? 20 : 40;
+  // En mobile usamos los mismos márgenes que el subsistema 1
+  // (margin 40, top 76, bottom 40) para que la ventana de
+  // interacción tenga el mismo tamaño y posición en todas las
+  // experiencias. En escritorio no se toca nada.
+  const margin = isMobile ? 40 : 40;
+  const top = isMobile ? 76 : 76;
+  const bottom = isMobile ? 40 : 40;
 
   // Igual que en script.js: en mobile el rectángulo disponible queda
   // muy alargado verticalmente, así que la volvemos cuadrada usando

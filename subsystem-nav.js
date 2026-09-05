@@ -67,6 +67,33 @@
     document.body.appendChild(btn);
   }
 
+  function createHomeButton() {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "nav-home";
+    btn.setAttribute("aria-label", "Volver al inicio");
+    btn.textContent = "⌂";
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      window.location.href = "index.html";
+    });
+
+    // Evita que el canvas interprete el click sobre el botón como
+    // un click en la simulación (mousedown/touchstart del canvas).
+    btn.addEventListener("mousedown", (e) => e.stopPropagation());
+    btn.addEventListener("touchstart", (e) => e.stopPropagation());
+
+    document.body.appendChild(btn);
+  }
+
   createArrow("prev", "‹", "Estado anterior");
   createArrow("next", "›", "Estado siguiente");
+
+  // El botón de "volver al inicio" solo se agrega en pantallas de
+  // escritorio: en mobile ya hay bastante interfaz encima de la
+  // experiencia (botones de fase, flechas) y el gesto para volver
+  // atrás del navegador ya cumple esa función.
+  const isDesktop = window.innerWidth >= 768;
+  if (isDesktop) createHomeButton();
 })();
