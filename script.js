@@ -345,6 +345,24 @@ function getStage() {
   const margin = isMobile ? 18 : 40;
   const top = isMobile ? 82 : 86;
 
+  // En mobile el ancho es mucho menor que el alto, así que si la
+  // ventana ocupa todo el espacio disponible queda un rectángulo
+  // muy alargado verticalmente y se ve raro. La hacemos cuadrada,
+  // usando el lado más chico entre ancho y alto, y la centramos en
+  // el espacio disponible. En escritorio no se toca nada.
+  if (isMobile) {
+    const availWidth = canvas.width - margin * 2;
+    const availHeight = canvas.height - top - margin;
+    const side = Math.min(availWidth, availHeight);
+
+    return {
+      x: margin + (availWidth - side) / 2,
+      y: top + (availHeight - side) / 2,
+      width: side,
+      height: side
+    };
+  }
+
   return {
     x: margin,
     y: top,
@@ -846,11 +864,25 @@ function drawBackground(now) {
   const stage = getStage();
   const flashBase = getExplosionBurstPower(now) > 0 ? 0.16 : 0;
 
-  const red = Math.floor(4 + 18 * anxietyMix + 8 * expectationMix + 18 * flashBase);
-  const blue = Math.floor(4 + 18 * expectationMix + 14 * flashBase);
+  // En reposo (sin ansiedad/expectativa/flash) no pintamos nada acá:
+  // el fondo ya quedó dibujado por drawOuterBackground() (incluido su
+  // degradado), así que la ventana se ve exactamente igual que el
+  // resto de la pantalla. Solo cuando hay un evento que cambia el
+  // tono aparece esta capa, con opacidad y color proporcionales a
+  // qué tan fuerte es ese evento.
+  const tintStrength = Math.min(
+    1,
+    0.55 * anxietyMix + 0.5 * expectationMix + 0.85 * flashBase
+  );
 
-ctx.fillStyle = "#050409";
-ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
+  if (tintStrength > 0.001) {
+    const red = Math.floor(5 + 18 * anxietyMix + 8 * expectationMix + 18 * flashBase);
+    const green = 4;
+    const blue = Math.floor(9 + 18 * expectationMix + 14 * flashBase);
+
+    ctx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${tintStrength})`;
+    ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
+  }
 
   const cx = stage.x + stage.width / 2;
   const cy = stage.y + stage.height / 2;
@@ -1289,20 +1321,34 @@ function drawLight(now) {
     expectationMix * (Math.sin(now * 0.008) * 0.015) +
     flashPower * (Math.sin(now * 0.03) * 0.08);
 
+  // Estos tamaños estaban fijos en píxeles, pensados para una
+  // ventana grande de escritorio. En mobile la ventana es mucho más
+  // chica, así que la luz terminaba ocupando casi todo el recuadro y
+  // tapaba las figuras/planetas de alrededor (sobre todo en
+  // expectativa, que es la fase donde más crece). Achicamos ambos
+  // tamaños en proporción al tamaño de la ventana, pero solo en
+  // mobile: en escritorio "lightScale" da 1 y queda todo exactamente
+  // igual que antes.
+  const lightScale = isMobile
+    ? Math.min(stage.width, stage.height) / 700
+    : 1;
+
   const radius =
-    38 * distantLight +
-    62 * anxietyMix * (1 - expectationMix) +
-    76 * expectationMix +
-    42 * flashPower +
+    (38 * distantLight +
+      62 * anxietyMix * (1 - expectationMix) +
+      76 * expectationMix +
+      42 * flashPower) *
+      lightScale +
     calmPulse * distantLight +
     anxiousPulse * anxietyMix * (1 - expectationMix) +
     stablePulse * expectationMix;
 
   const auraSize =
-    150 * distantLight +
-    230 * anxietyMix * (1 - expectationMix) +
-    340 * expectationMix +
-    260 * flashPower;
+    (150 * distantLight +
+      230 * anxietyMix * (1 - expectationMix) +
+      340 * expectationMix +
+      260 * flashPower) *
+    lightScale;
 
   const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, auraSize * flicker);
 

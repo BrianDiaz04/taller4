@@ -2,6 +2,7 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
 let dpr = window.devicePixelRatio || 1;
+const isMobile = window.innerWidth < 768;
 
 function resize() {
   dpr = window.devicePixelRatio || 1;
@@ -300,12 +301,44 @@ function drawBaseBackground() {
   ctx.fillRect(0, 0, w, h);
 }
 
+// Igual que getStage() en script.js/subsistema2.js: la "ventana" de
+// interacción. En escritorio es el mismo rectángulo de siempre; en
+// mobile, en vez de dejar que se estire verticalmente, la volvemos
+// cuadrada (lado más chico entre ancho y alto) y la centramos.
+function getStage() {
+  const margin = 40;
+  const top = 76;
+  const bottom = 40;
+
+  if (isMobile) {
+    const availWidth = window.innerWidth - margin * 2;
+    const availHeight = window.innerHeight - top - bottom;
+    const side = Math.min(availWidth, availHeight);
+
+    return {
+      x: margin + (availWidth - side) / 2,
+      y: top + (availHeight - side) / 2,
+      width: side,
+      height: side
+    };
+  }
+
+  return {
+    x: margin,
+    y: top,
+    width: window.innerWidth - margin * 2,
+    height: window.innerHeight - top - bottom
+  };
+}
+
 function drawFrame() {
+  const stage = getStage();
+
   ctx.save();
   ctx.noFill;
   ctx.strokeStyle = "rgba(90, 100, 120, 0.32)";
   ctx.lineWidth = 1.5;
-  ctx.strokeRect(40, 76, window.innerWidth - 80, window.innerHeight - 116);
+  ctx.strokeRect(stage.x, stage.y, stage.width, stage.height);
   ctx.restore();
 }
 
@@ -509,7 +542,7 @@ class HeritageNode {
 }
 
 function addHeritageNode(aggressive) {
-  const maxLevels = window.innerWidth < 768 ? 4 : 5;
+  const maxLevels = isMobile ? 4 : 5;
 
   let n = totalHeritageNodes;
   let level = 0;
@@ -528,12 +561,23 @@ function addHeritageNode(aggressive) {
   }
 
   const nodesInLevel = Math.pow(2, level);
-  const x = (window.innerWidth * (index + 1)) / (nodesInLevel + 1);
-  const topY = window.innerWidth < 768 ? 120 : 115;
-  const levelHeight = window.innerWidth < 768 ? 105 : 125;
+
+  // En escritorio, igual que antes: los nodos se reparten en todo
+  // el ancho de la ventana. En mobile, ahora que la ventana de
+  // interacción es cuadrada (y más angosta que antes), los repartimos
+  // dentro de ese cuadrado para que no se salgan del recuadro.
+  const x = isMobile
+    ? (() => {
+        const stage = getStage();
+        return stage.x + (stage.width * (index + 1)) / (nodesInLevel + 1);
+      })()
+    : (window.innerWidth * (index + 1)) / (nodesInLevel + 1);
+
+  const topY = isMobile ? 120 : 115;
+  const levelHeight = isMobile ? 105 : 125;
   const y = topY + level * levelHeight;
 
-  const rootSize = window.innerWidth < 768 ? 48 : 60;
+  const rootSize = isMobile ? 48 : 60;
   const size = rootSize * Math.pow(0.78, level);
 
   let parent = null;

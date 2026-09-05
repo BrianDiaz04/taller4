@@ -187,6 +187,22 @@ function getStage() {
   const top = isMobile ? 64 : 76;
   const bottom = isMobile ? 20 : 40;
 
+  // Igual que en script.js: en mobile el rectángulo disponible queda
+  // muy alargado verticalmente, así que la volvemos cuadrada usando
+  // el lado más chico y centrándola. En escritorio no cambia nada.
+  if (isMobile) {
+    const availWidth = W - margin * 2;
+    const availHeight = H - top - bottom;
+    const side = Math.min(availWidth, availHeight);
+
+    return {
+      x: margin + (availWidth - side) / 2,
+      y: top + (availHeight - side) / 2,
+      width: side,
+      height: side
+    };
+  }
+
   return {
     x: margin,
     y: top,
