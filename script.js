@@ -23,12 +23,25 @@ let anxietyMix = 0;
 let expectationMix = 0;
 
 let anxietyHoldTime = 0;
-let expectationHoldTime = 0;
-let expectationStage = "approach"; // approach, flash, final
-let expectationFlashStart = null;
 
-const expectationChargeDuration = 5;
-const expectationFlashDuration = 7;
+// Expectativa: en vez de una carga simple por tiempo sostenido, se
+// mide un "progreso" (0 a 1) que sube mientras se raya la pantalla y
+// baja si se suelta. Cerca del final cuesta más avanzar (efecto imán),
+// pero al soltar vuelve a su posición natural a la misma velocidad
+// base (sin el freno del imán). Si se retoma antes de llegar a 0, no
+// se pierde el progreso, pero se suman 2 segundos más al tiempo total
+// necesario, como penalización por haber pausado.
+let expectationProgress = 0;
+let expectationRequiredSeconds = 12;
+let expectationRecoveryPending = false;
+let expectationExploded = false;
+let expectationExplosionTime = null;
+const expectationBurstDuration = 1.4; // segundos que dura la ráfaga de la explosión
+
+// Ansiedad: parpadeo ocasional de oscurecimiento, breve y poco
+// frecuente, tipo "susto" de juegos de terror.
+let darkFlicker = null;
+let nextDarkFlickerCheckAt = 0;
 
 const shapes = [];
 const planets = [];
@@ -52,44 +65,115 @@ let nextSidewaysAllCheckAt = 0;
 
 resize();
 
+let mouseDown = false;
+let mouseLastX = null;
+let mouseLastY = null;
+
 canvas.addEventListener("mousedown", (e) => {
   if (handleLobbySelection(e.clientX, e.clientY)) return;
   if (inLobby) return;
 
-  // En desktop se mantiene el click sostenido como equivalente
-  // del gesto táctil (no hay "deslizar" real con mouse).
-  accelerating = true;
+  mouseDown = true;
+  mouseLastX = e.clientX;
+  mouseLastY = e.clientY;
+
+  if (phase === "expectativa") {
+    // En expectativa hay que "rayar": no alcanza con mantener
+    // apretado, hace falta mover el mouse de verdad.
+    accelerating = false;
+  } else {
+    // En incertidumbre/ansiedad, el click sostenido en desktop
+    // reemplaza al gesto de deslizar/mantener con el dedo.
+    accelerating = true;
+  }
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!mouseDown || phase !== "expectativa") return;
+
+  const deltaX = e.clientX - mouseLastX;
+  const deltaY = mouseLastY - e.clientY;
+  mouseLastX = e.clientX;
+  mouseLastY = e.clientY;
+
+  handleScratchGesture(deltaX, deltaY);
 });
 
 window.addEventListener("mouseup", () => {
+  mouseDown = false;
   accelerating = false;
+  clearScratchIdleTimer();
 });
 
 //------------------------------------
-// Touch: hace falta DESLIZAR hacia arriba para avanzar, no
-// alcanza con tocar y quedarse quieto. Se seguí el movimiento
-// del dedo entre cada touchmove: si viene subiendo, avanza; si
-// se queda quieto o baja, un pequeño timer de inactividad corta
-// el impulso enseguida (no hace falta levantar el dedo).
+// Touch: en incertidumbre/ansiedad hace falta DESLIZAR (arriba o
+// abajo según la fase) para arrancar, no alcanza con tocar y
+// quedarse quieto. Pero una vez arrancado, se sigue "sosteniendo"
+// mientras el dedo siga tocando la pantalla, aunque se quede
+// quieto (antes se cortaba solo con un timer de inactividad; eso
+// era el bug reportado). Solo se corta al soltar o al deslizar
+// claramente para el otro lado.
+// En expectativa es distinto: hace falta movimiento CONTINUO
+// (cualquier dirección, tipo "rayar"), y ahí sí corta un timer de
+// inactividad si el movimiento se detiene.
 //------------------------------------
 let touchLastY = null;
-let touchIdleTimer = null;
+let touchLastX = null;
+let scratchIdleTimer = null;
 
-const swipeUpThreshold = 2; // px mínimos de movimiento hacia arriba para contar
-const swipeIdleMs = 160; // sin nuevo movimiento hacia arriba en este lapso, se corta
+const swipeThreshold = 2; // px mínimos de movimiento (arriba o abajo) para contar
+const scratchThreshold = 2; // px mínimos de movimiento en cualquier dirección para contar como "rayado"
+const scratchIdleMs = 220; // sin movimiento nuevo en este lapso, se corta el rayado
 
-function clearSwipeIdleTimer() {
-  if (touchIdleTimer) {
-    clearTimeout(touchIdleTimer);
-    touchIdleTimer = null;
+function clearScratchIdleTimer() {
+  if (scratchIdleTimer) {
+    clearTimeout(scratchIdleTimer);
+    scratchIdleTimer = null;
   }
 }
 
-function armSwipeIdleTimer() {
-  clearSwipeIdleTimer();
-  touchIdleTimer = setTimeout(() => {
+function armScratchIdleTimer() {
+  clearScratchIdleTimer();
+  scratchIdleTimer = setTimeout(() => {
     accelerating = false;
-  }, swipeIdleMs);
+  }, scratchIdleMs);
+}
+
+// Incertidumbre (deslizar hacia arriba) y ansiedad (deslizar hacia
+// abajo, tratando de escapar) comparten la misma lógica de gesto:
+// una vez detectado el deslizamiento en la dirección correcta, se
+// sigue "sosteniendo" mientras el dedo siga tocando la pantalla,
+// aunque se quede quieto un rato (antes esto se cortaba solo, que
+// era el bug). Solo se corta si se levanta el dedo o si el
+// deslizamiento cambia claramente a la dirección contraria.
+function handleSwipeGesture(deltaY, wantsUp) {
+  const movingUp = deltaY > swipeThreshold;
+  const movingDown = deltaY < -swipeThreshold;
+
+  if (wantsUp) {
+    if (movingUp) accelerating = true;
+    else if (movingDown) accelerating = false;
+  } else {
+    if (movingDown) accelerating = true;
+    else if (movingUp) accelerating = false;
+  }
+  // Si el dedo está quieto (ni sube ni baja lo suficiente), no
+  // tocamos "accelerating": queda como estaba mientras siga
+  // tocando la pantalla.
+}
+
+// Expectativa ("rayar" la pantalla): acá importa el movimiento
+// continuo en cualquier dirección, no una dirección específica. Si
+// deja de moverse un rato (scratchIdleMs), se corta, aunque el dedo
+// siga apoyado en la pantalla.
+function handleScratchGesture(deltaX, deltaY) {
+  const moved =
+    Math.abs(deltaX) > scratchThreshold || Math.abs(deltaY) > scratchThreshold;
+
+  if (moved) {
+    accelerating = true;
+    armScratchIdleTimer();
+  }
 }
 
 canvas.addEventListener(
@@ -103,10 +187,11 @@ canvas.addEventListener(
     if (inLobby) return;
 
     touchLastY = touch.clientY;
+    touchLastX = touch.clientX;
 
-    // Tocar por sí solo no avanza nada; hace falta deslizar.
+    // Tocar por sí solo no avanza nada; hace falta deslizar/rayar.
     accelerating = false;
-    clearSwipeIdleTimer();
+    clearScratchIdleTimer();
   },
   { passive: false }
 );
@@ -120,15 +205,17 @@ canvas.addEventListener(
 
     const touch = e.touches[0];
     const deltaY = touchLastY - touch.clientY; // positivo = dedo subiendo
+    const deltaX = touch.clientX - touchLastX;
     touchLastY = touch.clientY;
+    touchLastX = touch.clientX;
 
-    if (deltaY > swipeUpThreshold) {
-      accelerating = true;
-      armSwipeIdleTimer();
+    if (phase === "incertidumbre") {
+      handleSwipeGesture(deltaY, true);
+    } else if (phase === "ansiedad") {
+      handleSwipeGesture(deltaY, false);
+    } else if (phase === "expectativa") {
+      handleScratchGesture(deltaX, deltaY);
     }
-    // Si desliza hacia abajo o casi no se mueve, no reactivamos:
-    // el timer de inactividad corta el impulso solo si dejó de
-    // venir movimiento hacia arriba.
   },
   { passive: false }
 );
@@ -136,13 +223,15 @@ canvas.addEventListener(
 window.addEventListener("touchend", () => {
   accelerating = false;
   touchLastY = null;
-  clearSwipeIdleTimer();
+  touchLastX = null;
+  clearScratchIdleTimer();
 });
 
 window.addEventListener("touchcancel", () => {
   accelerating = false;
   touchLastY = null;
-  clearSwipeIdleTimer();
+  touchLastX = null;
+  clearScratchIdleTimer();
 });
 
 window.addEventListener("keydown", (e) => {
@@ -218,14 +307,24 @@ function startPhase(selectedPhase) {
   inLobby = false;
   phase = selectedPhase;
   accelerating = false;
+  mouseDown = false;
+  touchLastY = null;
+  touchLastX = null;
+  clearScratchIdleTimer();
 
   anxietyMix = 0;
   expectationMix = 0;
 
   anxietyHoldTime = 0;
-  expectationHoldTime = 0;
-  expectationStage = "approach";
-  expectationFlashStart = null;
+
+  expectationProgress = 0;
+  expectationRequiredSeconds = 12;
+  expectationRecoveryPending = false;
+  expectationExploded = false;
+  expectationExplosionTime = null;
+
+  darkFlicker = null;
+  nextDarkFlickerCheckAt = 0;
 
   phaseStartTime = performance.now();
   nextAnomalyCheckAt = 0;
@@ -235,6 +334,10 @@ function startPhase(selectedPhase) {
 
   for (const s of shapes) {
     resetShape(s);
+  }
+
+  for (const p of planets) {
+    resetPlanet(p);
   }
 }
 
@@ -353,8 +456,19 @@ for (let i = 0; i < shapeCount; i++) {
 
 const planetCount = isMobile ? 38 : 56;
 
+// Antes de la explosión: posición dispersa "flotando" en x/y (no en
+// línea recta hacia el centro). Se reasigna cada vez que se entra a
+// la fase, igual que resetShape con las figuras.
+function resetPlanet(p) {
+  p.floatBaseXRatio = (Math.random() - 0.5) * 0.82;
+  p.floatBaseYRatio = (Math.random() - 0.5) * 0.82;
+  p.floatPhaseX = Math.random() * Math.PI * 2;
+  p.floatPhaseY = Math.random() * Math.PI * 2;
+  p.spinPhase = Math.random() * Math.PI * 2;
+}
+
 for (let i = 0; i < planetCount; i++) {
-  planets.push({
+  const p = {
     orbit: 80 + Math.random() * 360,
     angle: Math.random() * Math.PI * 2,
     speed: 0.00018 + Math.random() * 0.00042,
@@ -365,8 +479,20 @@ for (let i = 0; i < planetCount; i++) {
         : Math.random() < 0.72
         ? "square"
         : "triangle",
-    alpha: 0.42 + Math.random() * 0.5
-  });
+    alpha: 0.42 + Math.random() * 0.5,
+    // Ritmo de la flotación pre-explosión: pausado, similar al
+    // reposo (speed ~1.8) de incertidumbre/ansiedad cuando no se
+    // está interactuando.
+    floatFreqX: 0.00022 + Math.random() * 0.00026,
+    floatFreqY: 0.00022 + Math.random() * 0.00026,
+    floatAmpX: 16 + Math.random() * 26,
+    floatAmpY: 16 + Math.random() * 26,
+    // Giro sobre su propio eje una vez que está en órbita (final).
+    spinSpeed: (Math.random() < 0.5 ? -1 : 1) * (0.0005 + Math.random() * 0.001)
+  };
+
+  resetPlanet(p);
+  planets.push(p);
 }
 
 for (let i = 0; i < 90; i++) {
@@ -385,6 +511,34 @@ function drawTriangle(x, y, size) {
   ctx.lineTo(x + size, y + size);
   ctx.closePath();
   ctx.fill();
+}
+
+// Como drawTriangle/fillRect pero rotando la figura sobre su propio
+// eje (para las figuras del sistema solar en el estado final).
+function drawSpinningShape(x, y, size, type, spinAngle) {
+  if (type === "circle") {
+    ctx.beginPath();
+    ctx.arc(x, y, size, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(spinAngle);
+
+  if (type === "square") {
+    ctx.fillRect(-size, -size, size * 2, size * 2);
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.lineTo(-size, size);
+    ctx.lineTo(size, size);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.restore();
 }
 
 function animate(now = performance.now()) {
@@ -407,18 +561,32 @@ function animate(now = performance.now()) {
   }
 
   updatePhase(delta, now);
-  updateSpeed();
+  updateSpeed(now);
+  maybeTriggerDarkFlicker(now);
 
   clipStage();
 
-  drawBackground();
-  drawTunnel(now);
-  drawShapes(now);
-  drawAnxietyRays(now);
+  drawBackground(now);
+
+  // Las líneas de fondo (túnel) son propias de incertidumbre nada
+  // más: en ansiedad y expectativa se sacan, para que no se vea
+  // igual en las 3 fases.
+  if (phase === "incertidumbre") drawTunnel(now);
+
+  // Las figuras que avanzan hacia la cámara son de incertidumbre y
+  // ansiedad. En expectativa no van: ahí el protagonismo es del
+  // sistema de figuras que se acercan al centro (drawSolarSystem).
+  if (phase !== "expectativa") drawShapes(now);
   drawArrivalBurst(now);
-  drawSolarSystem(now);
-  drawLight(now);
+  // Antes de la explosión: sistema flotando disperso. Después: en
+  // órbita, con parte pasando detrás de la luz central y parte
+  // adelante (por eso se llama en dos pasos, separados por drawLight).
+  drawSolarSystemFloating(now);
+  drawSolarSystemBack(now);
+  if (phase !== "ansiedad") drawLight(now);
+  drawSolarSystemFront(now);
   drawFlash(now);
+  drawDarkFlicker(now);
 
   ctx.restore();
 
@@ -514,6 +682,12 @@ function updatePhase(delta, now) {
 
     if (accelerating) {
       anxietyHoldTime += delta;
+    } else {
+      // Al soltar, la ansiedad acumulada baja sola y se vuelve a
+      // un estado de calma (un poco más rápido de lo que tarda en
+      // subir, como un alivio al soltar).
+      anxietyHoldTime -= delta * 1.6;
+      if (anxietyHoldTime < 0) anxietyHoldTime = 0;
     }
 
     const target = Math.min(1, anxietyHoldTime / 5);
@@ -524,32 +698,47 @@ function updatePhase(delta, now) {
   if (phase === "expectativa") {
     anxietyMix += (0 - anxietyMix) * 0.035;
 
-    if (expectationStage === "approach") {
+    if (!expectationExploded) {
       if (accelerating) {
-        expectationHoldTime += delta;
+        // Si venía de una pausa con progreso todavía sin volver del
+        // todo a 0, retomar tiene un costo: se suman 2 segundos más
+        // al tiempo total necesario (no se pierde el progreso, pero
+        // cuesta un poco más llegar).
+        if (expectationRecoveryPending) {
+          expectationRequiredSeconds += 2;
+          expectationRecoveryPending = false;
+        }
+
+        // Efecto imán: cerca del centro (progreso alto) cuesta cada
+        // vez más avanzar.
+        const magnetFactor = 1 - expectationProgress * 0.65;
+        expectationProgress += (delta / expectationRequiredSeconds) * magnetFactor;
+
+        if (expectationProgress >= 1) {
+          expectationProgress = 1;
+          expectationExploded = true;
+          expectationExplosionTime = now;
+        }
+      } else if (expectationProgress > 0) {
+        expectationRecoveryPending = true;
+
+        // Vuelve a su posición natural a la misma velocidad base
+        // con la que se venía acercando (sin el freno del imán).
+        expectationProgress -= delta / expectationRequiredSeconds;
+
+        if (expectationProgress < 0) {
+          expectationProgress = 0;
+          expectationRecoveryPending = false;
+        }
       }
-
-      if (expectationHoldTime >= expectationChargeDuration) {
-        expectationStage = "flash";
-        expectationFlashStart = now;
-      }
-    }
-
-    if (expectationStage === "flash") {
-      const elapsed = (now - expectationFlashStart) / 1000;
-
-      if (elapsed >= expectationFlashDuration) {
-        expectationStage = "final";
-      }
-    }
-
-    if (expectationStage === "final") {
+    } else {
+      // Ya explotó: mezcla de calma ambiente post-explosión.
       expectationMix += (1 - expectationMix) * 0.018;
     }
   }
 }
 
-function updateSpeed() {
+function updateSpeed(now) {
   let targetSpeed = accelerating ? 13 : 1.8;
 
   if (phase === "ansiedad") {
@@ -557,18 +746,16 @@ function updateSpeed() {
     targetSpeed = targetSpeed * (1 - anxietyMix) + anxietyTargetSpeed * anxietyMix;
   }
 
-  if (phase === "expectativa") {
-    if (expectationStage === "approach") {
-      targetSpeed = accelerating ? 15 : 1.8;
-    }
+  if (phase === "expectativa" && expectationExploded) {
+    const elapsedSinceExplosion = (now - expectationExplosionTime) / 1000;
 
-    if (expectationStage === "flash") {
-      targetSpeed = 0.35;
-    }
-
-    if (expectationStage === "final") {
-      const finalSpeed = accelerating ? 2.1 : 0.55;
-      targetSpeed = targetSpeed * (1 - expectationMix) + finalSpeed * expectationMix;
+    if (elapsedSinceExplosion < expectationBurstDuration) {
+      // Ráfaga de la explosión: todo se dispara hacia la cámara.
+      targetSpeed = 16;
+    } else {
+      // Calma ambiente post-explosión.
+      const calmSpeed = accelerating ? 2.4 : 0.6;
+      targetSpeed = targetSpeed * (1 - expectationMix) + calmSpeed * expectationMix;
     }
   }
 
@@ -631,34 +818,39 @@ function drawLobbyScene(now) {
   }
 }
 
-function getFlashProgress(now) {
-  if (phase !== "expectativa" || expectationStage !== "flash") return 0;
-  if (expectationFlashStart === null) return 0;
+// Reemplaza al viejo sistema de "flash" con tiempos fijos: ahora la
+// ráfaga solo pasa una vez, justo cuando explota (al llegar el
+// progreso a 1), y dura expectationBurstDuration segundos.
+function isExpectationBursting(now) {
+  if (phase !== "expectativa" || !expectationExploded || expectationExplosionTime === null) {
+    return false;
+  }
 
-  const elapsed = (now - expectationFlashStart) / 1000;
-  return Math.min(1, elapsed / expectationFlashDuration);
+  return (now - expectationExplosionTime) / 1000 < expectationBurstDuration;
 }
 
-function getFlashPower(now) {
-  const progress = getFlashProgress(now);
-  if (progress <= 0) return 0;
+function getExplosionBurstPower(now) {
+  if (!isExpectationBursting(now)) return 0;
 
-  const fadeIn = Math.min(1, progress / 0.18);
-  const fadeOut = 1 - Math.max(0, (progress - 0.72) / 0.28);
-  const pulse = 0.78 + Math.sin(now * 0.018) * 0.22;
+  const elapsed = (now - expectationExplosionTime) / 1000;
+  const progress = Math.min(1, elapsed / expectationBurstDuration);
+
+  const fadeIn = Math.min(1, progress / 0.15);
+  const fadeOut = 1 - Math.max(0, (progress - 0.55) / 0.45);
+  const pulse = 0.8 + Math.sin(now * 0.02) * 0.2;
 
   return Math.max(0, Math.min(fadeIn, fadeOut)) * pulse;
 }
 
-function drawBackground() {
+function drawBackground(now) {
   const stage = getStage();
-  const flashBase = expectationStage === "flash" ? 0.16 : 0;
+  const flashBase = getExplosionBurstPower(now) > 0 ? 0.16 : 0;
 
   const red = Math.floor(4 + 18 * anxietyMix + 8 * expectationMix + 18 * flashBase);
   const blue = Math.floor(4 + 18 * expectationMix + 14 * flashBase);
 
-  ctx.fillStyle = `rgb(${red}, 2, ${blue})`;
-  ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
+ctx.fillStyle = "#050409";
+ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
 
   const cx = stage.x + stage.width / 2;
   const cy = stage.y + stage.height / 2;
@@ -743,13 +935,22 @@ function drawShapes(now) {
   const cx = stage.x + stage.width / 2;
   const cy = stage.y + stage.height / 2;
   const opacity = 0.86 - expectationMix * 0.58;
+  const isAnxiety = phase === "ansiedad";
 
-  ctx.fillStyle = `rgba(255, ${120 - 42 * anxietyMix}, ${
-    120 - 50 * anxietyMix
-  }, ${opacity})`;
+  // Fuera de ansiedad, un solo color parejo para todas (como antes).
+  // En ansiedad el color se calcula figura por figura más abajo,
+  // según qué tan cerca está cada una.
+  if (!isAnxiety) {
+    ctx.fillStyle = `rgba(255, ${120 - 42 * anxietyMix}, ${
+      120 - 50 * anxietyMix
+    }, ${opacity})`;
+  }
 
   ctx.shadowColor = anxietyMix > 0.5 ? "#ff3c3c" : "#ff6666";
-  ctx.shadowBlur = speed + 3 * anxietyMix;
+  // El desenfoque de ansiedad se logra con más shadowBlur (barato)
+  // en vez de ctx.filter (blur real), que con ~150 figuras por
+  // frame generaba lag notorio.
+  ctx.shadowBlur = speed + 3 * anxietyMix + (isAnxiety ? anxietyMix * 6 : 0);
 
   for (const s of shapes) {
     let anomalyStrength = 0;
@@ -767,10 +968,8 @@ function drawShapes(now) {
       }
     }
 
-    if (phase === "expectativa" && expectationStage === "final") {
+    if (isExpectationBursting(now)) {
       s.z += speed * 4.2;
-    } else if (phase === "expectativa" && expectationStage === "flash") {
-      s.z += 0.6;
     } else if (s.anomaly && s.anomaly.type === "reverse") {
       // en vez de avanzar, retrocede un rato
       s.z += speed * (1 + anomalyStrength * 1.6);
@@ -784,9 +983,13 @@ function drawShapes(now) {
     }
 
     if (s.z <= 1 || s.z > 3500) {
+      // En ansiedad nunca se frenan antes de llegar: apenas te
+      // "alcanzan" (o se pasan de largo) se resetean atrás y
+      // arrancan de nuevo, dando la sensación de que siempre viene
+      // otra encima sin pausa.
       resetShape(s);
 
-      if (phase === "expectativa" && expectationStage === "final") {
+      if (isExpectationBursting(now)) {
         s.z = 450 + Math.random() * 1000;
       }
 
@@ -807,7 +1010,14 @@ function drawShapes(now) {
     const shakePower = anxietyMix * (1 - expectationMix);
 
     if (shakePower > 0) {
-      const shakeAmount = shakePower * Math.min(4.5, 1.2 + size * 0.32);
+      let shakeAmount = shakePower * Math.min(4.5, 1.2 + size * 0.32);
+
+      if (isAnxiety) {
+        // En ansiedad tiemblan más en general, y todavía más fuerte
+        // en el instante justo del parpadeo negro (como un sobresalto).
+        shakeAmount *= darkFlicker ? 2.4 : 1.5;
+      }
+
       px += Math.sin(now * 0.028 + s.shake) * shakeAmount;
       py += Math.cos(now * 0.036 + s.shake) * shakeAmount;
     }
@@ -818,6 +1028,14 @@ function drawShapes(now) {
       ctx.save();
       ctx.fillStyle = `rgba(120, 200, 255, ${0.72 * anomalyStrength + 0.18})`;
       ctx.shadowColor = "#78c8ff";
+    } else if (isAnxiety) {
+      // Empiezan blancas (lejos, z alto) y se van poniendo rojas a
+      // medida que se acercan (z bajo).
+      const proximity = Math.max(0, Math.min(1, 1 - (s.z - 1) / 2449));
+      const g = Math.round(255 - proximity * 195);
+      const b = Math.round(255 - proximity * 205);
+
+      ctx.fillStyle = `rgba(255, ${g}, ${b}, ${opacity})`;
     }
 
     if (s.type === "square") {
@@ -865,16 +1083,14 @@ function drawAnxietyRays(now) {
 }
 
 function drawArrivalBurst(now) {
-  const flashPower = getFlashPower(now);
-  const finalBurst = phase === "expectativa" && expectationStage === "final" && expectationMix < 0.35;
+  const burst = getExplosionBurstPower(now);
 
-  if (flashPower <= 0 && !finalBurst) return;
+  if (burst <= 0) return;
 
   const stage = getStage();
   const cx = stage.x + stage.width / 2;
   const cy = stage.y + stage.height / 2;
   const maxLength = Math.max(stage.width, stage.height) * 0.72;
-  const burst = Math.max(flashPower, finalBurst ? 1 - expectationMix * 2.5 : 0);
 
   ctx.save();
   ctx.translate(cx, cy);
@@ -887,9 +1103,11 @@ function drawArrivalBurst(now) {
     const start = 26 + (1 - localBurst) * 110;
     const end = maxLength * ray.length;
 
-    ctx.strokeStyle = `rgba(255, ${150 + 70 * localBurst}, ${
-      150 + 70 * localBurst
-    }, ${0.16 * localBurst})`;
+    // Rojizo (misma familia que el resto de las fases) en vez del
+    // tono blanco/rosado que tenía antes.
+    ctx.strokeStyle = `rgba(255, ${70 + 55 * localBurst}, ${
+      55 + 45 * localBurst
+    }, ${0.2 * localBurst})`;
 
     ctx.lineWidth = ray.width * localBurst;
 
@@ -902,26 +1120,116 @@ function drawArrivalBurst(now) {
   ctx.restore();
 }
 
-function drawSolarSystem(now) {
-  if (expectationMix <= 0) return;
+// Estado inicial (cargando, sin explotar): figuras dispersas por el
+// escenario, flotando en x e y a ritmo pausado — ni quietas del
+// todo, ni yendo en línea recta hacia el centro.
+// Estado inicial (cargando, sin explotar): vuelve a la disposición
+// radial de antes (cada figura en su ángulo fijo, acercándose al
+// centro según expectationProgress con el efecto imán), pero ya no
+// están del todo quietas: se les suma un pequeño vaivén en su propio
+// eje para darles algo de vida.
+function drawSolarSystemFloating(now) {
+  if (phase !== "expectativa" || expectationExploded) return;
 
   const stage = getStage();
   const cx = stage.x + stage.width / 2;
   const cy = stage.y + stage.height / 2;
+  const maxOrbit = getOrbitMaxRadius(stage);
+  const minOrbit = maxOrbit * 0.22; // qué tan cerca del centro llegan (nunca lo tocan del todo)
 
-  const orbitScale = isMobile ? 0.38 : 0.43;
-  const maxOrbit = Math.min(stage.width, stage.height) * orbitScale;
-  const reveal = Math.max(0, (expectationMix - 0.08) / 0.92);
-
-  const zoomOut = 3.2 - reveal * 2.2;
-  const systemAlpha = Math.min(1, reveal * 1.35);
+  const eased = 1 - Math.pow(1 - expectationProgress, 2);
 
   ctx.save();
   ctx.translate(cx, cy);
-  ctx.scale(zoomOut, zoomOut);
 
-  ctx.strokeStyle = `rgba(255, 180, 172, ${0.2 * systemAlpha})`;
-  ctx.lineWidth = 1 / zoomOut;
+  ctx.shadowColor = "#ff6a60";
+  ctx.shadowBlur = 5;
+
+  for (const p of planets) {
+    const orbit = Math.min(p.orbit, maxOrbit) * (1 - eased) + minOrbit * eased;
+    const baseX = Math.cos(p.angle) * orbit;
+    const baseY = Math.sin(p.angle) * orbit;
+
+    // Vaivén chico alrededor de esa posición fija, no un flotado
+    // amplio: solo un poquito de movimiento.
+    const x = baseX + Math.sin(now * p.floatFreqX + p.floatPhaseX) * p.floatAmpX * 0.32;
+    const y = baseY + Math.cos(now * p.floatFreqY + p.floatPhaseY) * p.floatAmpY * 0.32;
+
+    ctx.fillStyle = `rgba(255, 120, 122, ${p.alpha})`;
+
+    if (p.type === "circle") {
+      ctx.beginPath();
+      ctx.arc(x, y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (p.type === "square") {
+      ctx.fillRect(x - p.size, y - p.size, p.size * 2, p.size * 2);
+    } else {
+      drawTriangle(x, y, p.size);
+    }
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+function getOrbitMaxRadius(stage) {
+  const orbitScale = isMobile ? 0.38 : 0.43;
+  return Math.min(stage.width, stage.height) * orbitScale;
+}
+
+// Ángulo, posición (elíptica, para simular profundidad) y giro
+// propio de una figura en el estado final, en órbita alrededor del
+// centro.
+function getOrbitPlanetState(p, maxOrbit, now) {
+  const orbitAngle = p.angle + p.speed * now;
+  const orbitRadius = Math.min(p.orbit, maxOrbit);
+  const tilt = 0.42; // achatamiento de la elipse
+
+  return {
+    x: Math.cos(orbitAngle) * orbitRadius,
+    y: Math.sin(orbitAngle) * orbitRadius * tilt,
+    depthFactor: Math.sin(orbitAngle), // -1 atrás del todo, +1 adelante del todo
+    spinAngle: p.spinPhase + now * p.spinSpeed
+  };
+}
+
+function drawOrbitPlanet(p, state, alphaMul) {
+  const depthScale = 1 + state.depthFactor * 0.32;
+  const depthAlpha = 0.55 + 0.45 * ((state.depthFactor + 1) / 2);
+  const size = p.size * depthScale;
+
+  ctx.fillStyle = `rgba(255, 90, 95, ${p.alpha * depthAlpha * alphaMul})`;
+  ctx.shadowColor = "#ff6a60";
+  ctx.shadowBlur = 6 * depthAlpha;
+
+  drawSpinningShape(state.x, state.y, size, p.type, state.spinAngle);
+
+  ctx.shadowBlur = 0;
+}
+
+// Estado final (ya explotó): las figuras quedan en órbita alrededor
+// del centro para siempre, girando sobre su propio eje. Se dibuja en
+// dos pasadas (back/front) para que las que están "atrás" queden
+// detrás de la luz central y las que están "adelante" por encima.
+function drawSolarSystemBack(now) {
+  if (phase !== "expectativa" || !expectationExploded) return;
+
+  const stage = getStage();
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
+  const maxOrbit = getOrbitMaxRadius(stage);
+
+  // Aparición suave apenas termina la ráfaga de la explosión, para
+  // que no "salten" de golpe a su posición de órbita.
+  const settleIn = Math.min(1, (now - expectationExplosionTime) / 900);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  // Los anillos (líneas) del sistema solar se ven únicamente acá,
+  // en el estado final — nunca mientras se está cargando.
+  ctx.strokeStyle = `rgba(255, 120, 112, ${0.22 * settleIn})`;
+  ctx.lineWidth = 1;
 
   for (let r = 82; r < maxOrbit; r += 42) {
     ctx.beginPath();
@@ -929,39 +1237,33 @@ function drawSolarSystem(now) {
     ctx.stroke();
   }
 
-  ctx.strokeStyle = `rgba(255, 105, 120, ${0.09 * systemAlpha})`;
+  for (const p of planets) {
+    const state = getOrbitPlanetState(p, maxOrbit, now);
+    if (state.depthFactor > 0) continue; // esas se dibujan en el paso "front"
 
-  for (let i = 0; i < 14; i++) {
-    const angle = ((Math.PI * 2) / 14) * i;
-    ctx.beginPath();
-    ctx.moveTo(Math.cos(angle) * 58, Math.sin(angle) * 58);
-    ctx.lineTo(Math.cos(angle) * maxOrbit, Math.sin(angle) * maxOrbit);
-    ctx.stroke();
+    drawOrbitPlanet(p, state, settleIn);
   }
 
+  ctx.restore();
+}
+
+function drawSolarSystemFront(now) {
+  if (phase !== "expectativa" || !expectationExploded) return;
+
+  const stage = getStage();
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
+  const maxOrbit = getOrbitMaxRadius(stage);
+  const settleIn = Math.min(1, (now - expectationExplosionTime) / 900);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
   for (const p of planets) {
-    const orbit = Math.min(p.orbit, maxOrbit);
-    const angle = p.angle + now * p.speed;
-    const x = Math.cos(angle) * orbit;
-    const y = Math.sin(angle) * orbit;
-    const size = p.size;
+    const state = getOrbitPlanetState(p, maxOrbit, now);
+    if (state.depthFactor <= 0) continue; // esas ya se dibujaron en "back"
 
-    ctx.fillStyle = `rgba(255, 88, 104, ${p.alpha * systemAlpha})`;
-    ctx.strokeStyle = `rgba(255, 210, 198, ${0.72 * systemAlpha})`;
-    ctx.shadowColor = "#ffaaa0";
-    ctx.shadowBlur = 6 * systemAlpha;
-
-    if (p.type === "circle") {
-      ctx.beginPath();
-      ctx.arc(x, y, size, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (p.type === "square") {
-      ctx.fillRect(x - size, y - size, size * 2, size * 2);
-    } else {
-      drawTriangle(x, y, size);
-    }
-
-    ctx.shadowBlur = 0;
+    drawOrbitPlanet(p, state, settleIn);
   }
 
   ctx.restore();
@@ -971,7 +1273,7 @@ function drawLight(now) {
   const stage = getStage();
   const cx = stage.x + stage.width / 2;
   const cy = stage.y + stage.height / 2;
-  const flashPower = getFlashPower(now);
+  const flashPower = getExplosionBurstPower(now);
 
   glow += 0.03;
 
@@ -1035,12 +1337,66 @@ function drawLight(now) {
 }
 
 function drawFlash(now) {
-  const flashPower = getFlashPower(now);
+  const burstPower = getExplosionBurstPower(now);
 
-  if (flashPower <= 0) return;
+  if (burstPower <= 0) return;
 
   const stage = getStage();
 
-  ctx.fillStyle = `rgba(255, 238, 230, ${0.26 * flashPower})`;
+  // Reddish en vez de blanco, para mantener la paleta de las 3 fases.
+  ctx.fillStyle = `rgba(255, 90, 70, ${0.28 * burstPower})`;
+  ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
+}
+
+// Ansiedad: parpadeo ocasional de oscurecimiento, breve y poco
+// frecuente (para que no pierda impacto), tipo "susto" de juegos de
+// terror, seguido de la sensación de tensión que ya deja el resto de
+// la escena (temblor, figuras que no se van).
+function maybeTriggerDarkFlicker(now) {
+  if (phase !== "ansiedad") return;
+
+  // Solo puede aparecer mientras se está haciendo la interacción
+  // (sosteniendo/deslizando) y una vez que el estado de ansiedad ya
+  // arrancó de verdad (anxietyMix con algo de recorrido), no apenas
+  // se entra a la fase o en momentos de calma sin interactuar.
+  if (!accelerating || anxietyMix < 0.15) return;
+
+  if (now < nextDarkFlickerCheckAt) return;
+
+  // Cuanto más tiempo sostenido (anxietyMix más alto), más seguido
+  // se chequea si aparece el parpadeo y más probable que aparezca.
+  const intensity = Math.max(0, Math.min(1, (anxietyMix - 0.15) / 0.85));
+  const minInterval = 4000 - intensity * 2800; // hasta ~1200ms
+  const maxInterval = 9000 - intensity * 5500; // hasta ~3500ms
+
+  nextDarkFlickerCheckAt =
+    now + minInterval + Math.random() * (maxInterval - minInterval);
+
+  const triggerChance = 0.35 + intensity * 0.4; // hasta 0.75
+
+  if (!darkFlicker && Math.random() < triggerChance) {
+    darkFlicker = {
+      start: now,
+      duration: 160 + Math.random() * 220
+    };
+  }
+}
+
+function drawDarkFlicker(now) {
+  if (!darkFlicker) return;
+
+  const elapsed = now - darkFlicker.start;
+
+  if (elapsed > darkFlicker.duration) {
+    darkFlicker = null;
+    return;
+  }
+
+  const t = elapsed / darkFlicker.duration;
+  // Sube y baja rápido, como un corte a negro tipo susto.
+  const power = t < 0.5 ? t / 0.5 : 1 - (t - 0.5) / 0.5;
+
+  const stage = getStage();
+  ctx.fillStyle = `rgba(0, 0, 0, ${0.82 * power})`;
   ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
 }
