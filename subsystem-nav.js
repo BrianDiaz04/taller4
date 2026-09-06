@@ -34,12 +34,20 @@
   if (params.get("mini") === "1") return;
 
   const currentFile = window.location.pathname.split("/").pop();
-  const currentEstado = params.get("estado");
 
-  let currentIndex = STATES.findIndex(
-    (s) => s.file === currentFile && s.estado === currentEstado
-  );
-  if (currentIndex === -1) currentIndex = 0;
+  // OJO: currentIndex se recalcula en cada goTo(), no una sola vez al
+  // cargar. Los botones con título (Memoria/Herencia/Caducidad, etc.)
+  // cambian el estado dentro de la misma página y actualizan el
+  // parámetro ?estado= de la URL sin recargarla (ver switchSystem /
+  // switchWork / startPhase en cada subsistemaN). Si acá se leyera la
+  // URL una sola vez al inicio, la flecha ignoraría esos cambios y
+  // siempre partiría del estado con el que se cargó la página.
+  function getCurrentIndex() {
+    const params = new URLSearchParams(window.location.search);
+    const estado = params.get("estado");
+    const index = STATES.findIndex((s) => s.file === currentFile && s.estado === estado);
+    return index === -1 ? 0 : index;
+  }
 
   function goTo(index) {
     const wrapped = (index + STATES.length) % STATES.length;
@@ -56,6 +64,7 @@
 
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
+      const currentIndex = getCurrentIndex();
       goTo(direction === "prev" ? currentIndex - 1 : currentIndex + 1);
     });
 

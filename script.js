@@ -312,6 +312,11 @@ function startPhase(selectedPhase) {
   touchLastX = null;
   clearScratchIdleTimer();
 
+  const url = new URL(window.location.href);
+  url.searchParams.set("estado", selectedPhase);
+  window.history.replaceState({}, "", url);
+
+
   anxietyMix = 0;
   expectationMix = 0;
 
@@ -376,20 +381,11 @@ function getStage() {
   };
 }
 
+// Fondo unificado de las 9 experiencias: delega en la única
+// implementación compartida (shared-background.js), la misma
+// que usan subsistema.js y subsistema2.js.
 function drawOuterBackground() {
-  ctx.fillStyle = "#050409";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
-
-  const glowBackground = ctx.createRadialGradient(cx, cy, 0, cx, cy, canvas.width);
-  glowBackground.addColorStop(0, "rgba(80, 18, 28, 0.12)");
-  glowBackground.addColorStop(0.5, "rgba(28, 8, 18, 0.18)");
-  glowBackground.addColorStop(1, "rgba(0, 0, 0, 0)");
-
-  ctx.fillStyle = glowBackground;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawSharedBackground(ctx, canvas.width, canvas.height);
 }
 
 function clipStage() {

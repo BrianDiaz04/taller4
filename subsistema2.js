@@ -45,7 +45,7 @@ canvas.addEventListener("mousedown", (e) => {
   if (checkButtons(pointer.x, pointer.y)) return;
 
   if (currentWork === "sinergias") synergyMousePressed();
-  if (currentWork === "ramas") branchesTouch(pointer.x, pointer.y);
+  if (currentWork === "ramas") empathyMousePressed(pointer.x, pointer.y);
   if (currentWork === "ruptura") ruptureMousePressed(pointer.x, pointer.y);
 });
 
@@ -59,6 +59,8 @@ window.addEventListener("mousemove", (e) => {
 window.addEventListener("mouseup", () => {
   pointer.down = false;
   synergyMouseReleased();
+  empathyMouseReleased();
+  ruptureMouseReleased();
 });
 
 canvas.addEventListener(
@@ -76,7 +78,7 @@ canvas.addEventListener(
     if (checkButtons(pointer.x, pointer.y)) return;
 
     if (currentWork === "sinergias") synergyMousePressed();
-    if (currentWork === "ramas") branchesTouch(pointer.x, pointer.y);
+    if (currentWork === "ramas") empathyMousePressed(pointer.x, pointer.y);
     if (currentWork === "ruptura") ruptureMousePressed(pointer.x, pointer.y);
   },
   { passive: false }
@@ -99,6 +101,8 @@ canvas.addEventListener(
 window.addEventListener("touchend", () => {
   pointer.down = false;
   synergyMouseReleased();
+  empathyMouseReleased();
+  ruptureMouseReleased();
 });
 
 window.addEventListener("keydown", (e) => {
@@ -116,6 +120,10 @@ window.addEventListener("keydown", (e) => {
 
 function switchWork(name) {
   currentWork = name;
+
+  const url = new URL(window.location.href);
+  url.searchParams.set("estado", name);
+  window.history.replaceState({}, "", url);
 }
 
 //------------------------------------
@@ -155,24 +163,26 @@ function drawButtons() {
   for (const b of buttons) {
     const active = currentWork === b.work;
 
-    ctx.fillStyle = active ? "rgba(255, 183, 178, 0.24)" : "rgba(8, 7, 14, 0.78)";
-    ctx.strokeStyle = active ? "rgba(255, 220, 210, 0.72)" : "rgba(255, 220, 210, 0.24)";
+    ctx.fillStyle = active ? "rgba(120, 200, 235, 0.24)" : "rgba(8, 7, 14, 0.78)";
+    ctx.strokeStyle = active ? "rgba(180, 225, 245, 0.72)" : "rgba(180, 225, 245, 0.24)";
     ctx.lineWidth = 1;
 
     roundedRect(b.x, b.y, b.w, b.h, 8);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = active ? "rgba(255, 235, 225, 0.96)" : "rgba(225, 205, 205, 0.68)";
+    ctx.fillStyle = active ? "rgba(220, 240, 250, 0.96)" : "rgba(200, 220, 230, 0.68)";
     ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2);
   }
 
   ctx.restore();
 }
 
+// Fondo unificado de las 9 experiencias: delega en la única
+// implementación compartida (shared-background.js), la misma
+// que usan subsistema.js y script.js.
 function drawBaseBackground(glow = 0) {
-  ctx.fillStyle = lerpRgb([5, 4, 9], [22, 15, 38], glow);
-  ctx.fillRect(0, 0, W, H);
+  drawSharedBackground(ctx, W, H, glow);
 }
 
 //------------------------------------
@@ -226,60 +236,67 @@ function drawStageFrame() {
 }
 
 //------------------------------------
-// 1. Sinergias Colectivas
+// 1. Colaboracion - union manual
 //------------------------------------
+// A diferencia del resto de las experiencias, acá el vínculo no
+// aparece solo: hay que arrastrar una figura hasta otra igual y
+// soltarla cerca para que se fusionen. De esa unión nace un círculo
+// de control que sostiene al grupo; y esos círculos, si se juntan
+// entre sí, arman un aro mayor que reúne a todos los grupos en el
+// centro de la escena.
 const synergy = {
   shapes: [],
   particles: [],
   dragged: null,
-  connectionDist: 100,
+  connectionDist: 70,
   snapSpeed: 0.15,
   globalGlow: 0,
   nextGroupId: 0,
+  superRing: [],
   colors: {
     triangle: [255, 183, 178],
     square: [199, 206, 234],
     circle: [175, 228, 222],
+    celeste: [150, 205, 240],
     idle: [100, 105, 115]
   }
 };
 
 class SynergyShape {
   constructor(type, x, y) {
-    this.type = type;
+    this.type = type; // 0: triángulo, 1: cuadrado, 2: círculo (control)
     this.pos = vec(x, y);
     this.target = vec(x, y);
     this.vel = randomVec(random(0.2, 0.6));
     this.groupId = -1;
+    this.linkedGroupId = -1; // para los círculos de control: qué grupo mandan
     this.size = 30;
     this.angle = random(0, Math.PI * 2);
-    this.seed = random(0, 1000);
     this.dragging = false;
     this.grouped = false;
+    this.isControlNode = false;
     this.currentColor = [...synergy.colors.idle];
     this.targetColor = [...synergy.colors.idle];
   }
 
-  resetGroupState() {
-    if (this.groupId < 0) {
-      this.grouped = false;
-      this.targetColor = [...synergy.colors.idle];
-    } else {
-      this.grouped = true;
-      if (this.type === 0) this.targetColor = [...synergy.colors.triangle];
-      if (this.type === 1) this.targetColor = [...synergy.colors.square];
-      if (this.type === 2) this.targetColor = [...synergy.colors.circle];
-    }
-  }
+  updatePhysics() {
+    const stage = getStage();
 
-  updatePhysics(frame) {
     if (this.dragging) {
-      if (this.groupId >= 0) {
-        const dx = pointer.x - pointer.px;
-        const dy = pointer.y - pointer.py;
+      const dx = pointer.x - pointer.px;
+      const dy = pointer.y - pointer.py;
+
+      if (this.grouped || this.isControlNode) {
+        // Al arrastrar una figura o un círculo se mueve todo el grupo unido a él
+        const targetGroup = this.isControlNode ? this.linkedGroupId : this.groupId;
+
+        if (this.isControlNode) {
+          const idx = synergy.superRing.indexOf(this);
+          if (idx !== -1) synergy.superRing.splice(idx, 1);
+        }
 
         for (const s of synergy.shapes) {
-          if (s.groupId === this.groupId) {
+          if ((s.groupId === targetGroup && targetGroup !== -1) || (s.isControlNode && s.linkedGroupId === targetGroup)) {
             s.pos.x += dx;
             s.pos.y += dy;
             s.vel.x = 0;
@@ -287,31 +304,37 @@ class SynergyShape {
           }
         }
       } else {
-        this.pos.x = lerp(this.pos.x, pointer.x, 0.35);
-        this.pos.y = lerp(this.pos.y, pointer.y, 0.35);
+        this.pos.x += dx;
+        this.pos.y += dy;
         this.vel.x = 0;
         this.vel.y = 0;
       }
-    } else if (!this.grouped) {
-      const stage = getStage();
-      const left = stage.x + 20;
-      const right = stage.x + stage.width - 20;
-      const top = stage.y + 15;
-      const bottom = stage.y + stage.height - 20;
+    } else if (!this.grouped && !this.isControlNode) {
+      // Figuras sueltas flotan libres dentro del escenario
+      this.pos.x += this.vel.x;
+      this.pos.y += this.vel.y;
 
-      this.pos.x += this.vel.x + Math.sin(frame * 0.015 + this.seed) * 0.15;
-      this.pos.y += this.vel.y + Math.cos(frame * 0.015 + this.seed) * 0.15;
+      if (this.pos.x < stage.x + 30 || this.pos.x > stage.x + stage.width - 30) this.vel.x *= -1;
+      if (this.pos.y < stage.y + 30 || this.pos.y > stage.y + stage.height - 30) this.vel.y *= -1;
 
-      if (this.pos.x < left || this.pos.x > right) this.vel.x *= -1;
-      if (this.pos.y < top || this.pos.y > bottom) this.vel.y *= -1;
+      this.pos.x = clamp(this.pos.x, stage.x + 30, stage.x + stage.width - 30);
+      this.pos.y = clamp(this.pos.y, stage.y + 30, stage.y + stage.height - 30);
+    } else if (this.isControlNode && synergy.superRing.indexOf(this) === -1) {
+      // Círculos sueltos (con su grupo detrás) flotan sutilmente
+      this.pos.x += this.vel.x;
+      this.pos.y += this.vel.y;
 
-      this.pos.x = clamp(this.pos.x, stage.x, stage.x + stage.width);
-      this.pos.y = clamp(this.pos.y, stage.y, stage.y + stage.height);
+      if (this.pos.x < stage.x + 50 || this.pos.x > stage.x + stage.width - 50) this.vel.x *= -1;
+      if (this.pos.y < stage.y + 50 || this.pos.y > stage.y + stage.height - 50) this.vel.y *= -1;
+
+      this.pos.x = clamp(this.pos.x, stage.x + 50, stage.x + stage.width - 50);
+      this.pos.y = clamp(this.pos.y, stage.y + 50, stage.y + stage.height - 50);
     }
   }
 
   updatePosition() {
-    if (this.grouped && !this.dragging) {
+    // Se adhieren magnéticamente al objetivo calculado en drawSynergy
+    if ((this.grouped && !this.dragging) || (this.isControlNode && synergy.superRing.includes(this) && !this.dragging)) {
       this.pos.x = lerp(this.pos.x, this.target.x, synergy.snapSpeed);
       this.pos.y = lerp(this.pos.y, this.target.y, synergy.snapSpeed);
     }
@@ -325,10 +348,11 @@ class SynergyShape {
     ctx.translate(this.pos.x, this.pos.y);
     ctx.rotate(this.angle);
 
-    const pulseScale = this.grouped ? 1 + synergy.globalGlow * 0.35 : 1;
+    let pulseScale = 1;
     const c = this.currentColor;
 
-    if (this.grouped) {
+    if (this.grouped || this.isControlNode) {
+      pulseScale += synergy.globalGlow * 0.35;
       ctx.strokeStyle = rgba(c, 0.78 + synergy.globalGlow * 0.2);
       ctx.fillStyle = rgba(c, 0.12 + synergy.globalGlow * 0.36);
       ctx.lineWidth = 2.5 + synergy.globalGlow * 3;
@@ -358,8 +382,15 @@ class SynergyShape {
       ctx.arc(0, 0, s / 2, 0, Math.PI * 2);
     }
 
-    if (this.grouped) ctx.fill();
+    if (this.grouped || this.isControlNode) ctx.fill();
     ctx.stroke();
+
+    if (this.isControlNode) {
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+      ctx.arc(0, 0, this.size * 0.95 * pulseScale * 0.15, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     ctx.restore();
   }
@@ -369,9 +400,9 @@ class SynergyParticle {
   constructor(x, y, color) {
     this.x = x;
     this.y = y;
-    this.vx = random(-3, 3);
-    this.vy = random(-3, 3);
-    this.size = random(2.5, 6);
+    this.vx = random(-4, 4);
+    this.vy = random(-4, 4);
+    this.size = random(2.5, 7);
     this.alpha = 1;
     this.color = color;
   }
@@ -394,6 +425,7 @@ function initSynergy() {
   synergy.dragged = null;
   synergy.globalGlow = 0;
   synergy.nextGroupId = 0;
+  synergy.superRing = [];
 
   const stage = getStage();
   const sx0 = stage.x + 60;
@@ -402,87 +434,120 @@ function initSynergy() {
   const sy1 = stage.y + stage.height - 60;
 
   for (let i = 0; i < 8; i++) synergy.shapes.push(new SynergyShape(0, random(sx0, sx1), random(sy0, sy1)));
-  for (let i = 0; i < 6; i++) synergy.shapes.push(new SynergyShape(1, random(sx0, sx1), random(sy0, sy1)));
-  for (let i = 0; i < 4; i++) synergy.shapes.push(new SynergyShape(2, random(sx0, sx1), random(sy0, sy1)));
+  for (let i = 0; i < 8; i++) synergy.shapes.push(new SynergyShape(1, random(sx0, sx1), random(sy0, sy1)));
 }
 
 function drawSynergy(frame) {
   drawBaseBackground(synergy.globalGlow);
 
-  for (const s of synergy.shapes) s.updatePhysics(frame);
+  const stage = getStage();
 
-  const clusters = findSynergyClusters();
+  for (const s of synergy.shapes) s.updatePhysics();
 
-  for (const s of synergy.shapes) s.resetGroupState();
+  const controlCircles = synergy.shapes.filter((s) => s.isControlNode);
 
-  const activeCentroids = [];
+  if (synergy.superRing.length > 1) {
+    // Aro mayor: todos los grupos quedan reunidos en el centro del escenario
+    synergy.globalGlow = lerp(synergy.globalGlow, 0.85, 0.05);
 
-  for (const cluster of clusters) {
-    let triangles = 0;
-    let squares = 0;
-    let circles = 0;
-    const centroid = vec(0, 0);
+    const center = vec(stage.x + stage.width / 2, stage.y + stage.height / 2);
+    const globalAngle = frame * 0.015;
 
-    for (const s of cluster) {
-      centroid.x += s.pos.x;
-      centroid.y += s.pos.y;
-      if (s.type === 0) triangles++;
-      if (s.type === 1) squares++;
-      if (s.type === 2) circles++;
+    // Los círculos de control ya no quedan como un aro de círculos
+    // separados: convergen todos hacia el mismo punto central, tan
+    // cerca entre sí que se leen como un solo círculo (y de paso
+    // vira su color hacia el celeste, la tonalidad de la unión total).
+    const mergeRadius = 12;
+
+    for (let i = 0; i < synergy.superRing.length; i++) {
+      const c = synergy.superRing[i];
+      const angle = globalAngle + (i * Math.PI * 2) / synergy.superRing.length;
+
+      c.target.x = center.x + Math.cos(angle) * mergeRadius;
+      c.target.y = center.y + Math.sin(angle) * mergeRadius;
+      c.targetColor = [...synergy.colors.celeste];
     }
 
-    centroid.x /= cluster.length;
-    centroid.y /= cluster.length;
+    // Todos los grupos que llegan al aro mayor se funden en una sola
+    // figura: un único aro exterior que alterna triángulo, cuadrado,
+    // triángulo, cuadrado... para que se lea como una sola trama
+    // ordenada, en vez de una mezcla enredada.
+    const linkedGroupIds = synergy.superRing.map((c) => c.linkedGroupId);
+    const allMembers = synergy.shapes.filter((s) => !s.isControlNode && linkedGroupIds.includes(s.groupId));
+    const triangleMembers = allMembers.filter((s) => s.type === 0);
+    const squareMembers = allMembers.filter((s) => s.type === 1);
+    const orderedMembers = [];
+    const maxLen = Math.max(triangleMembers.length, squareMembers.length);
 
-    if (triangles === 4 && cluster.length === 4) {
-      activeCentroids.push(centroid);
-      lockSynergyGroup(cluster, centroid, "triangle", frame);
-    } else if (squares === 2 && circles === 1 && cluster.length === 3) {
-      activeCentroids.push(centroid);
-      lockSynergyGroup(cluster, centroid, "lens", frame);
-    } else if (cluster.length > 1) {
-      ctx.strokeStyle = "rgba(255,255,255,0.035)";
+    for (let k = 0; k < maxLen; k++) {
+      if (squareMembers[k]) orderedMembers.push(squareMembers[k]);
+      if (triangleMembers[k]) orderedMembers.push(triangleMembers[k]);
+    }
+
+    const outerRadius = 180 + 20 * Math.sin(frame * 0.05);
+
+    orderedMembers.forEach((m, j) => {
+      const mAngle = globalAngle * 1.3 + (j * Math.PI * 2) / orderedMembers.length;
+      m.target.x = center.x + Math.cos(mAngle) * outerRadius;
+      m.target.y = center.y + Math.sin(mAngle) * outerRadius;
+    });
+
+    // El conjunto ya fundido es el que "respira": un único pulso
+    // grande de luz celeste que nace del centro y se expande, en vez
+    // de vínculos individuales entre círculos.
+    drawSynergyBigPulse(center, frame);
+
+    if (frame % 4 === 0) {
+      synergy.particles.push(new SynergyParticle(center.x + random(-15, 15), center.y + random(-15, 15), synergy.colors.celeste));
+    }
+  } else {
+    // Sin aro mayor: cada grupo orbita a su propio círculo de control
+    synergy.globalGlow = lerp(synergy.globalGlow, 0, 0.08);
+
+    for (const c of controlCircles) {
+      if (synergy.superRing.includes(c)) continue;
+
+      const members = synergy.shapes.filter((s) => s.groupId === c.linkedGroupId && !s.isControlNode);
+
+      members.forEach((m, j) => {
+        const mAngle = frame * 0.03 + (j * Math.PI * 2) / members.length;
+        m.target.x = c.pos.x + Math.cos(mAngle) * 55;
+        m.target.y = c.pos.y + Math.sin(mAngle) * 55;
+      });
+    }
+  }
+
+  // Enlaces visuales de cada grupo hacia su círculo de control
+  for (const c of controlCircles) {
+    const members = synergy.shapes.filter((s) => s.groupId === c.linkedGroupId && !s.isControlNode);
+
+    if (members.length > 0) {
+      // El contorno propio del grupo solo se dibuja mientras el grupo
+      // sigue siendo su propio bloque; una vez que se fusiona al aro
+      // mayor, todos comparten una sola formación y ese contorno
+      // individual dejaría de tener sentido (y se vería como líneas
+      // cruzadas sin relación con las posiciones reales).
+      if (!synergy.superRing.includes(c)) {
+        ctx.save();
+        ctx.strokeStyle = rgba(c.targetColor, 0.2 + 0.6 * synergy.globalGlow);
+        ctx.lineWidth = 2 + 2 * synergy.globalGlow;
+        ctx.beginPath();
+        members.forEach((m, i) => {
+          if (i === 0) ctx.moveTo(m.pos.x, m.pos.y);
+          else ctx.lineTo(m.pos.x, m.pos.y);
+        });
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
       ctx.lineWidth = 1;
-
-      for (let i = 0; i < cluster.length; i++) {
-        for (let j = i + 1; j < cluster.length; j++) {
-          line(cluster[i].pos.x, cluster[i].pos.y, cluster[j].pos.x, cluster[j].pos.y);
-        }
-      }
+      for (const m of members) line(m.pos.x, m.pos.y, c.pos.x, c.pos.y);
+      ctx.restore();
     }
   }
-
-  let targetGlow = 0;
-  const limit = 250;
-
-  for (let i = 0; i < activeCentroids.length; i++) {
-    for (let j = i + 1; j < activeCentroids.length; j++) {
-      const a = activeCentroids[i];
-      const b = activeCentroids[j];
-      const d = dist(a.x, a.y, b.x, b.y);
-
-      if (d < limit) {
-        let intensity = map(d, 0, limit, 1, 0);
-        intensity = Math.pow(intensity, 1.5);
-        targetGlow += intensity * 0.8;
-
-        drawElectricArc(a, b, intensity);
-
-        if (d < 100 && frame % 2 < 1) {
-          const t = Math.random();
-          synergy.particles.push(
-            new SynergyParticle(
-              lerp(a.x, b.x, t) + random(-15, 15),
-              lerp(a.y, b.y, t) + random(-15, 15),
-              lerpColorArray(synergy.colors.triangle, synergy.colors.circle, Math.sin(frame * 0.05) * 0.5 + 0.5)
-            )
-          );
-        }
-      }
-    }
-  }
-
-  synergy.globalGlow = lerp(synergy.globalGlow, Math.min(0.85, targetGlow), 0.08);
 
   for (const s of synergy.shapes) {
     s.updatePosition();
@@ -497,127 +562,126 @@ function drawSynergy(frame) {
   }
 }
 
-function lockSynergyGroup(cluster, centroid, mode, frame) {
-  let id = -1;
-
-  for (const s of cluster) {
-    if (s.groupId >= 0) {
-      id = s.groupId;
-      break;
-    }
+function createSynergyExplosion(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    synergy.particles.push(new SynergyParticle(x, y, color));
   }
+}
 
-  const newGroup = id === -1;
+// Pulso único que emite el conjunto ya fundido: un anillo de luz que
+// nace del centro, se expande y se apaga, y se repite — en tonos
+// celestes, como el brillo de algo unido respirando junto, en vez de
+// las chispas o los vínculos sueltos entre partes separadas.
+function drawSynergyBigPulse(center, frame) {
+  const [r, g, b] = synergy.colors.celeste;
+  const period = 90;
+  const phase = (frame % period) / period;
+  const maxRadius = 220;
+  const radius = 40 + phase * maxRadius;
+  const ringAlpha = (1 - phase) * 0.5;
 
-  if (id === -1) {
-    id = synergy.nextGroupId++;
-    const col = mode === "triangle" ? synergy.colors.triangle : synergy.colors.circle;
-    for (let i = 0; i < 30; i++) synergy.particles.push(new SynergyParticle(centroid.x, centroid.y, col));
-  }
+  ctx.save();
+  ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${ringAlpha})`;
+  ctx.lineWidth = 1 + 3 * (1 - phase);
+  strokeCircle(center.x, center.y, radius * 2);
+  ctx.restore();
 
-  if (mode === "triangle") {
-    const angle = frame * 0.015;
-    const radius = 45;
-    let k = 0;
+  const coreSize = 55 + 10 * Math.sin(frame * 0.05);
 
-    for (const s of cluster) {
-      s.grouped = true;
-      s.groupId = id;
-      s.targetColor = [...synergy.colors.triangle];
+  ctx.save();
+  const glow = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, coreSize);
+  glow.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.55)`);
+  glow.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(center.x, center.y, coreSize, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
 
-      if (k < 3) {
-        const a = (k * Math.PI * 2) / 3 + angle;
-        s.target.x = centroid.x + Math.cos(a) * radius;
-        s.target.y = centroid.y + Math.sin(a) * radius;
-      } else {
-        s.target.x = centroid.x;
-        s.target.y = centroid.y;
-      }
-      k++;
-    }
+// Resuelve qué pasa al soltar una figura o un círculo: fusión con otra
+// figura del mismo tipo, incorporación a un grupo existente, fusión de
+// dos grupos, o unión de dos círculos de control al súper aro.
+function resolveSynergyDrop(dragged) {
+  if (!dragged) return;
 
-    ctx.strokeStyle = rgba(synergy.colors.triangle, 0.2 + synergy.globalGlow * 0.4);
-    ctx.lineWidth = 2 + synergy.globalGlow * 2;
-    ctx.beginPath();
-    for (let i = 0; i < 3; i++) {
-      const a = (i * Math.PI * 2) / 3 + angle;
-      const x = centroid.x + Math.cos(a) * radius;
-      const y = centroid.y + Math.sin(a) * radius;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.stroke();
-  }
+  if (!dragged.isControlNode) {
+    let closest = null;
+    let minDist = synergy.connectionDist;
 
-  if (mode === "lens") {
-    const angle = frame * 0.01;
-    const spacing = 50;
-    let sq = 0;
-
-    for (const s of cluster) {
-      s.grouped = true;
-      s.groupId = id;
-
-      if (s.type === 2) {
-        s.target.x = centroid.x;
-        s.target.y = centroid.y;
-        s.targetColor = [...synergy.colors.circle];
-      } else if (s.type === 1) {
-        const sign = sq === 0 ? 1 : -1;
-        s.target.x = centroid.x + Math.cos(angle) * spacing * sign;
-        s.target.y = centroid.y + Math.sin(angle) * spacing * sign;
-        s.targetColor = [...synergy.colors.square];
-        sq++;
+    for (const s of synergy.shapes) {
+      if (s !== dragged && s.type === dragged.type && !s.isControlNode) {
+        const d = dist(dragged.pos.x, dragged.pos.y, s.pos.x, s.pos.y);
+        if (d < minDist) {
+          minDist = d;
+          closest = s;
+        }
       }
     }
 
-    ctx.strokeStyle = rgba(synergy.colors.circle, 0.24 + synergy.globalGlow * 0.4);
-    ctx.lineWidth = 3 + synergy.globalGlow * 3;
-    line(
-      centroid.x - Math.cos(angle) * spacing * 1.5,
-      centroid.y - Math.sin(angle) * spacing * 1.5,
-      centroid.x + Math.cos(angle) * spacing * 1.5,
-      centroid.y + Math.sin(angle) * spacing * 1.5
-    );
+    if (closest) {
+      if (!dragged.grouped && !closest.grouped) {
+        // Nace un grupo nuevo de 2 figuras
+        const id = synergy.nextGroupId++;
+        dragged.grouped = closest.grouped = true;
+        dragged.groupId = closest.groupId = id;
 
-    ctx.strokeStyle = rgba(synergy.colors.circle, 0.15 * (1 - (frame % 60) / 60));
-    ctx.lineWidth = 1;
-    strokeCircle(centroid.x, centroid.y, (frame % 60) * 2.5);
-  }
+        const col = dragged.type === 0 ? synergy.colors.triangle : synergy.colors.square;
+        dragged.targetColor = [...col];
+        closest.targetColor = [...col];
 
-  return newGroup;
-}
+        // Nace el círculo de control
+        const avg = vec((dragged.pos.x + closest.pos.x) / 2, (dragged.pos.y + closest.pos.y) / 2);
+        const control = new SynergyShape(2, avg.x, avg.y);
+        control.isControlNode = true;
+        control.linkedGroupId = id;
+        control.targetColor = [...synergy.colors.circle];
+        control.vel = randomVec(0.5);
+        synergy.shapes.push(control);
 
-function findSynergyClusters() {
-  const clusters = [];
-  const visited = new Array(synergy.shapes.length).fill(false);
+        createSynergyExplosion(avg.x, avg.y, synergy.colors.circle, 30);
+      } else if (closest.grouped && !dragged.grouped) {
+        // La figura suelta se une al grupo existente
+        dragged.grouped = true;
+        dragged.groupId = closest.groupId;
+        dragged.targetColor = [...closest.targetColor];
+        createSynergyExplosion(dragged.pos.x, dragged.pos.y, closest.targetColor, 15);
+      } else if (dragged.grouped && !closest.grouped) {
+        // La figura objetivo se une al grupo de la que arrastramos
+        closest.grouped = true;
+        closest.groupId = dragged.groupId;
+        closest.targetColor = [...dragged.targetColor];
+        createSynergyExplosion(closest.pos.x, closest.pos.y, dragged.targetColor, 15);
+      } else if (dragged.grouped && closest.grouped && dragged.groupId !== closest.groupId) {
+        // Fusión de dos grupos del mismo tipo en uno solo
+        const targetId = closest.groupId;
+        const oldId = dragged.groupId;
 
-  for (let i = 0; i < synergy.shapes.length; i++) {
-    if (!visited[i]) {
-      const cluster = [];
-      dfsSynergy(i, visited, cluster);
-      clusters.push(cluster);
+        for (const s of synergy.shapes) {
+          if (s.groupId === oldId) s.groupId = targetId;
+        }
+
+        for (let i = synergy.shapes.length - 1; i >= 0; i--) {
+          const s = synergy.shapes[i];
+          if (s.isControlNode && s.linkedGroupId === oldId) {
+            const ringIdx = synergy.superRing.indexOf(s);
+            if (ringIdx !== -1) synergy.superRing.splice(ringIdx, 1);
+            createSynergyExplosion(s.pos.x, s.pos.y, [255, 255, 255], 20);
+            synergy.shapes.splice(i, 1);
+          }
+        }
+      }
     }
-  }
-
-  return clusters;
-}
-
-function dfsSynergy(index, visited, cluster) {
-  visited[index] = true;
-  const current = synergy.shapes[index];
-  cluster.push(current);
-
-  for (let i = 0; i < synergy.shapes.length; i++) {
-    if (visited[i]) continue;
-
-    const other = synergy.shapes[i];
-
-    if (current.groupId >= 0) {
-      if (other.groupId === current.groupId) dfsSynergy(i, visited, cluster);
-    } else if (other.groupId === -1 && dist(current.pos.x, current.pos.y, other.pos.x, other.pos.y) < synergy.connectionDist) {
-      dfsSynergy(i, visited, cluster);
+  } else {
+    // Súper aro: juntar círculos de control
+    for (const s of synergy.shapes) {
+      if (s !== dragged && s.isControlNode) {
+        if (dist(dragged.pos.x, dragged.pos.y, s.pos.x, s.pos.y) < synergy.connectionDist * 1.5) {
+          if (!synergy.superRing.includes(dragged)) synergy.superRing.push(dragged);
+          if (!synergy.superRing.includes(s)) synergy.superRing.push(s);
+          createSynergyExplosion(dragged.pos.x, dragged.pos.y, [255, 255, 255], 40);
+        }
+      }
     }
   }
 }
@@ -638,671 +702,732 @@ function synergyMousePressed() {
 }
 
 function synergyMouseReleased() {
-  if (synergy.dragged) synergy.dragged.dragging = false;
+  const dragged = synergy.dragged;
+
+  if (dragged) {
+    dragged.dragging = false;
+    resolveSynergyDrop(dragged);
+  }
+
   synergy.dragged = null;
 }
 
+
 //------------------------------------
-// 2. Ruptura de la linea - ramas
+// 2. Empatia - flotacion libre y pulsacion compartida
 //------------------------------------
-const branchesWork = {
-  circles: [],
-  branches: [],
-  flowSpeed: 2,
-  spawnRate: 12,
-  spawnCounter: 0,
-  squarePos: vec(0, 0),
-  squareActive: false,
-  hueVal: 0,
-  shakeIntensity: 0,
-  prevMouse: vec(0, 0),
-  start: vec(50, 90),
-  end: vec(W - 50, H - 50),
-  state: 0,
-  colorResetFactor: 1,
-  hues: [],
-  hueIndex: 0,
-  lastHue: -1
+// Adaptado de un sketch de Processing: tres figuras (triangulo,
+// cuadrado, circulo) flotan libres por la escena. Cuando dos se
+// acercan lo suficiente empiezan a "escucharse" - una linea tenue y
+// tembloroza que se va afirmando - hasta quedar vinculadas; una vez
+// vinculadas laten al mismo ritmo, se sostienen a una distancia
+// comoda entre si y, si se alejan demasiado, el vinculo se rompe.
+// Alrededor, un enjambre de figuras de fondo flota por su cuenta y
+// respira al mismo pulso que las figuras principales, como eco del
+// vinculo central. Cuantos mas vinculos hay activos, mas se ilumina
+// el fondo compartido de las 9 experiencias.
+const empathy = {
+  entities: [],
+  bgShapes: [],
+  dragged: null,
+  syncProgress: [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+  isLinked: [[false, false, false], [false, false, false], [false, false, false]],
+  globalGlow: 0,
+  colors: {
+    triangle: [0, 245, 212],
+    square: [4, 139, 133],
+    circle: [72, 202, 228]
+  }
 };
 
-class BranchPath {
-  constructor(breakPoint, clickPoint, exitPoint, dir, col) {
-    this.breakPoint = clone(breakPoint);
-    this.clickedPoint = clone(clickPoint);
-    this.exitPoint = clone(exitPoint);
-    this.dir = clone(dir);
-    this.col = col;
-    this.currentClick = clone(clickPoint);
-    this.currentExit = clone(exitPoint);
-    this.moving = false;
-    this.squareT = 0;
-    this.followers = [];
-    this.separation = 38;
+class EmpathyEntity {
+  constructor(type, x, y, color, size, freq) {
+    this.type = type; // 0: triangulo, 1: cuadrado, 2: circulo
+    this.pos = vec(x, y);
+    this.vel = randomVec(random(0.1, 0.3));
+    this.color = color;
+    this.size = size;
+
+    this.baseFreq = freq;
+    this.currentFreq = freq;
+    this.phase = random(0, Math.PI * 2);
+    this.angle = 0;
   }
 
-  addFollower(c) {
-    if (!c.inChain) {
-      this.followers.push(c);
-      c.inChain = true;
-    }
-  }
+  updatePhysics() {
+    const stage = getStage();
+    const margin = Math.max(40, this.size);
 
-  update() {
-    if (!this.moving) return;
+    if (empathy.dragged === this) {
+      this.pos.x = lerp(this.pos.x, pointer.x, 0.2);
+      this.pos.y = lerp(this.pos.y, pointer.y, 0.2);
+      this.vel.x = 0;
+      this.vel.y = 0;
+    } else {
+      this.pos.x += this.vel.x;
+      this.pos.y += this.vel.y;
+      this.vel.x *= 0.96;
+      this.vel.y *= 0.96;
 
-    if (branchesWork.state !== 2) {
-      const d = dist(this.clickedPoint.x, this.clickedPoint.y, this.exitPoint.x, this.exitPoint.y);
-      if (d > 1) this.squareT = Math.min(1, this.squareT + branchesWork.flowSpeed / d);
-      this.currentClick.x = lerp(this.clickedPoint.x, this.exitPoint.x, this.squareT);
-      this.currentClick.y = lerp(this.clickedPoint.y, this.exitPoint.y, this.squareT);
-    }
-
-    const sep = branchesWork.state === 2 ? this.separation * branchesWork.colorResetFactor : this.separation;
-
-    for (let i = 0; i < this.followers.length; i++) {
-      const c = this.followers[i];
-      c.pos.x = this.currentClick.x - this.dir.x * (i + 1) * sep;
-      c.pos.y = this.currentClick.y - this.dir.y * (i + 1) * sep;
-    }
-  }
-
-  display() {
-    ctx.fillStyle = rgba(this.col, 0.12);
-    rectCenter(this.currentClick.x, this.currentClick.y, 24, 24);
-
-    ctx.fillStyle = rgba(this.col, 1);
-    rectCenter(this.currentClick.x, this.currentClick.y, 16, 16);
-  }
-}
-
-class FlowCircle {
-  constructor() {
-    this.segmentT = 0;
-    this.pathStep = 0;
-    this.pos = vec(0, 0);
-    this.baseColor = hsbToRgb(0, 0, 45);
-    this.dead = false;
-    this.isRebel = false;
-    this.activeBranch = null;
-    this.inChain = false;
-  }
-
-  waypoint(step) {
-    if (this.isRebel && this.activeBranch) {
-      if (step === 0) return branchesWork.start;
-      if (step === 1) return this.activeBranch.breakPoint;
-      if (step === 2) return this.activeBranch.clickedPoint;
-      return this.activeBranch.exitPoint;
-    }
-
-    if (step === 0) return branchesWork.start;
-    return branchesWork.end;
-  }
-
-  maxSteps() {
-    return this.isRebel ? 4 : 2;
-  }
-
-  update() {
-    if (this.inChain) return;
-
-    let a = this.waypoint(this.pathStep);
-    let b = this.waypoint(this.pathStep + 1);
-    const d = dist(a.x, a.y, b.x, b.y);
-
-    if (d > 0.5) this.segmentT += branchesWork.flowSpeed / d;
-    else this.segmentT = 1.1;
-
-    if (this.segmentT >= 1) {
-      this.segmentT = 0;
-
-      if (this.isRebel && this.activeBranch) {
-        if (this.pathStep === 1) this.activeBranch.moving = true;
-        if (this.pathStep === 2) {
-          this.activeBranch.addFollower(this);
-          return;
-        }
+      if (Math.hypot(this.vel.x, this.vel.y) < 0.2) {
+        const impulse = randomVec(0.02);
+        this.vel.x += impulse.x;
+        this.vel.y += impulse.y;
       }
 
-      this.pathStep++;
+      if (this.pos.x < stage.x + margin || this.pos.x > stage.x + stage.width - margin) this.vel.x *= -1;
+      if (this.pos.y < stage.y + margin || this.pos.y > stage.y + stage.height - margin) this.vel.y *= -1;
+
+      this.pos.x = clamp(this.pos.x, stage.x + margin, stage.x + stage.width - margin);
+      this.pos.y = clamp(this.pos.y, stage.y + margin, stage.y + stage.height - margin);
     }
 
-    if (this.pathStep >= this.maxSteps() - 1) {
-      this.dead = true;
-      return;
-    }
-
-    a = this.waypoint(this.pathStep);
-    b = this.waypoint(this.pathStep + 1);
-    this.pos.x = lerp(a.x, b.x, this.segmentT);
-    this.pos.y = lerp(a.y, b.y, this.segmentT);
+    this.angle += 0.005;
   }
 
-  display() {
-    let finalColor = this.baseColor;
+  display(index) {
+    ctx.save();
 
-    if (this.isRebel && this.activeBranch) {
-      finalColor =
-        branchesWork.state === 2
-          ? lerpColorArray(this.baseColor, this.activeBranch.col, branchesWork.colorResetFactor)
-          : this.activeBranch.col;
+    // Tiembla un poco mientras "escucha" a otra figura sin llegar a vincularse
+    let maxFriction = 0;
+    for (let j = 0; j < 3; j++) {
+      if (j !== index && !empathy.isLinked[index][j] && empathy.syncProgress[index][j] > 0) {
+        maxFriction = Math.max(maxFriction, 1 - empathy.syncProgress[index][j]);
+      }
+    }
+    const shake = maxFriction;
+
+    ctx.translate(this.pos.x + random(-shake, shake), this.pos.y + random(-shake, shake));
+    ctx.rotate(this.angle);
+
+    const currentSize = this.size + Math.sin(this.phase) * (this.size * 0.3);
+    const isUnited = empathy.isLinked[index][0] || empathy.isLinked[index][1] || empathy.isLinked[index][2];
+
+    if (isUnited) {
+      ctx.fillStyle = rgba(this.color, 0.24);
+      drawEmpathyEntityShape(this.type, currentSize * 1.6, currentSize * 2.2, currentSize * 1.2);
     }
 
-    if (this.isRebel) {
-      ctx.fillStyle = rgba(finalColor, 0.1);
-      circle(this.pos.x, this.pos.y, 30);
-    }
+    ctx.fillStyle = rgba(this.color, 1);
+    drawEmpathyEntityShape(this.type, currentSize, currentSize * 1.5, currentSize * 0.8);
 
-    ctx.fillStyle = rgba(finalColor, 1);
-    circle(this.pos.x, this.pos.y, 16);
+    ctx.restore();
   }
 }
 
-function initBranches() {
-  branchesWork.circles = [];
-  branchesWork.branches = [];
-  branchesWork.spawnCounter = 0;
-  branchesWork.squareActive = false;
-  branchesWork.hueVal = 0;
-  branchesWork.shakeIntensity = 0;
+// Dibuja, ya trasladado al origen de la figura, el triangulo (radio
+// triR), el cuadrado (lado sqSide) o el circulo (diametro circD)
+// segun el tipo, y lo rellena con el fillStyle ya seteado por quien
+// llama.
+function drawEmpathyEntityShape(type, triR, sqSide, circD) {
+  if (type === 0) {
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      const a = (i * Math.PI * 2) / 3 - Math.PI / 2;
+      const x = Math.cos(a) * triR;
+      const y = Math.sin(a) * triR;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+  } else if (type === 1) {
+    rectCenter(0, 0, sqSide, sqSide);
+  } else {
+    circle(0, 0, circD);
+  }
+}
 
+// Logica de escucha, vinculo y ruptura entre cada par de figuras:
+// se acercan -> tiemblan y se van sincronizando -> se vinculan y
+// laten juntas a una distancia comoda -> si se alejan demasiado, el
+// vinculo se rompe y vuelven a flotar libres.
+function updateEmpathyLinks() {
+  for (let i = 0; i < 3; i++) {
+    for (let j = i + 1; j < 3; j++) {
+      const e1 = empathy.entities[i];
+      const e2 = empathy.entities[j];
+      const d = dist(e1.pos.x, e1.pos.y, e2.pos.x, e2.pos.y);
+
+      if (empathy.isLinked[i][j]) {
+        if (d > 210) {
+          empathy.isLinked[i][j] = false;
+          empathy.isLinked[j][i] = false;
+          empathy.syncProgress[i][j] = 0;
+          empathy.syncProgress[j][i] = 0;
+        } else {
+          const pulseLine = map(Math.sin(e1.phase), -1, 1, 1, 3);
+          ctx.strokeStyle = rgba(lerpColorArray(e1.color, e2.color, 0.5), 0.78);
+          ctx.lineWidth = pulseLine;
+          line(e1.pos.x, e1.pos.y, e2.pos.x, e2.pos.y);
+
+          const pull = sub(e2.pos, e1.pos);
+          const pullDist = Math.hypot(pull.x, pull.y);
+          const dir = normalize(pull);
+          const force = (pullDist - 130) * 0.0005;
+
+          e1.vel.x += dir.x * force;
+          e1.vel.y += dir.y * force;
+          e2.vel.x -= dir.x * force;
+          e2.vel.y -= dir.y * force;
+
+          const tangentX = -dir.y * 0.0015;
+          const tangentY = dir.x * 0.0015;
+          e1.vel.x += tangentX;
+          e1.vel.y += tangentY;
+          e2.vel.x -= tangentX;
+          e2.vel.y -= tangentY;
+        }
+      } else if (d < 140) {
+        empathy.syncProgress[i][j] += 0.003;
+        empathy.syncProgress[j][i] = empathy.syncProgress[i][j];
+
+        const shake = (1 - empathy.syncProgress[i][j]) * 1.5;
+        ctx.strokeStyle = rgba(lerpColorArray(e1.color, e2.color, 0.5), 0.47 * empathy.syncProgress[i][j]);
+        ctx.lineWidth = 1;
+        line(
+          e1.pos.x + random(-shake, shake), e1.pos.y + random(-shake, shake),
+          e2.pos.x + random(-shake, shake), e2.pos.y + random(-shake, shake)
+        );
+
+        if (empathy.syncProgress[i][j] >= 1) {
+          empathy.isLinked[i][j] = true;
+          empathy.isLinked[j][i] = true;
+        }
+      } else if (empathy.syncProgress[i][j] > 0) {
+        empathy.syncProgress[i][j] -= 0.005;
+        empathy.syncProgress[j][i] = empathy.syncProgress[i][j];
+      }
+    }
+  }
+}
+
+// Agrupa las figuras vinculadas (componentes conectados) y sincroniza
+// la frecuencia de latido dentro de cada grupo: una figura "lidera"
+// el ritmo y el resto copia su fase.
+function updateEmpathyGroupFrequencies() {
+  const root = [0, 1, 2];
+
+  if (empathy.isLinked[0][1]) {
+    const r0 = root[0];
+    const r1 = root[1];
+    for (let k = 0; k < 3; k++) if (root[k] === r1) root[k] = r0;
+  }
+  if (empathy.isLinked[1][2]) {
+    const r1 = root[1];
+    const r2 = root[2];
+    for (let k = 0; k < 3; k++) if (root[k] === r2) root[k] = r1;
+  }
+  if (empathy.isLinked[0][2]) {
+    const r0 = root[0];
+    const r2 = root[2];
+    for (let k = 0; k < 3; k++) if (root[k] === r2) root[k] = r0;
+  }
+
+  const sumF = [0, 0, 0];
+  const countF = [0, 0, 0];
+  for (let i = 0; i < 3; i++) {
+    sumF[root[i]] += empathy.entities[i].baseFreq;
+    countF[root[i]]++;
+  }
+
+  for (let i = 0; i < 3; i++) {
+    const e = empathy.entities[i];
+    const r = root[i];
+    const avgF = sumF[r] / countF[r];
+    e.currentFreq = lerp(e.currentFreq, avgF, 0.05);
+
+    let leader = i;
+    for (let k = 0; k < 3; k++) {
+      if (root[k] === r) {
+        leader = k;
+        break;
+      }
+    }
+
+    if (i === leader) {
+      e.phase += e.currentFreq;
+    } else {
+      e.phase = empathy.entities[leader].phase;
+    }
+  }
+}
+
+// Figuras de fondo: flotan libres por todo el escenario y laten al
+// mismo ritmo que la figura principal 0, como eco del vinculo central.
+class EmpathyBgShape {
+  constructor(stage) {
+    this.pos = vec(random(stage.x, stage.x + stage.width), random(stage.y, stage.y + stage.height));
+    this.vel = randomVec(random(0.1, 0.4));
+    this.type = Math.floor(random(0, 3));
+    this.size = random(15, 30);
+    this.angle = random(0, Math.PI * 2);
+    this.rotSpeed = random(-0.005, 0.005);
+    this.color = empathy.colors.circle;
+  }
+
+  update(stage) {
+    this.pos.x += this.vel.x;
+    this.pos.y += this.vel.y;
+    this.vel.x *= 0.99;
+    this.vel.y *= 0.99;
+
+    const speed = Math.hypot(this.vel.x, this.vel.y);
+    if (speed < 0.2) {
+      const impulse = randomVec(0.05);
+      this.vel.x += impulse.x;
+      this.vel.y += impulse.y;
+    }
+
+    const limit = 0.5;
+    const speed2 = Math.hypot(this.vel.x, this.vel.y);
+    if (speed2 > limit) {
+      this.vel.x = (this.vel.x / speed2) * limit;
+      this.vel.y = (this.vel.y / speed2) * limit;
+    }
+
+    this.angle += this.rotSpeed;
+
+    // Pantalla infinita: reaparece del otro lado del escenario.
+    if (this.pos.x < stage.x - 30) this.pos.x = stage.x + stage.width + 30;
+    if (this.pos.x > stage.x + stage.width + 30) this.pos.x = stage.x - 30;
+    if (this.pos.y < stage.y - 30) this.pos.y = stage.y + stage.height + 30;
+    if (this.pos.y > stage.y + stage.height + 30) this.pos.y = stage.y - 30;
+  }
+
+  display(globalPhase) {
+    ctx.save();
+    ctx.translate(this.pos.x, this.pos.y);
+    ctx.rotate(this.angle);
+
+    const currentSize = this.size + Math.sin(globalPhase) * (this.size * 0.2);
+    const alpha = (25 + Math.sin(globalPhase) * 15) / 255;
+
+    ctx.strokeStyle = rgba(this.color, alpha);
+    ctx.lineWidth = 1;
+
+    if (this.type === 0) {
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) {
+        const a = (i * Math.PI * 2) / 3 - Math.PI / 2;
+        const x = Math.cos(a) * currentSize;
+        const y = Math.sin(a) * currentSize;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    } else if (this.type === 1) {
+      rectCenterStroke(0, 0, currentSize * 1.2, currentSize * 1.2);
+    } else {
+      strokeCircle(0, 0, currentSize * 1.3);
+    }
+
+    ctx.restore();
+  }
+}
+
+function initEmpathy() {
   const stage = getStage();
-  branchesWork.start = vec(stage.x + 20, stage.y + 20);
-  branchesWork.end = vec(stage.x + stage.width - 20, stage.y + stage.height - 20);
 
-  branchesWork.state = 0;
-  branchesWork.colorResetFactor = 1;
-  branchesWork.hues = [];
+  empathy.entities = [
+    new EmpathyEntity(0, stage.x + stage.width * 0.28, stage.y + stage.height * 0.36, empathy.colors.triangle, 22, 0.08),
+    new EmpathyEntity(1, stage.x + stage.width * 0.72, stage.y + stage.height * 0.36, empathy.colors.square, 28, 0.02),
+    new EmpathyEntity(2, stage.x + stage.width * 0.5, stage.y + stage.height * 0.74, empathy.colors.circle, 24, 0.04)
+  ];
 
-  for (let i = 0; i < 36; i++) branchesWork.hues.push(i * 10);
-  shuffle(branchesWork.hues);
-  branchesWork.hueIndex = 0;
-  branchesWork.lastHue = -1;
+  empathy.bgShapes = [];
+  for (let i = 0; i < 15; i++) empathy.bgShapes.push(new EmpathyBgShape(stage));
+
+  empathy.dragged = null;
+  empathy.globalGlow = 0;
+  empathy.syncProgress = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  empathy.isLinked = [[false, false, false], [false, false, false], [false, false, false]];
 }
 
-function drawBranches(frame) {
-  drawBaseBackground(0);
+function drawEmpathy() {
+  const stage = getStage();
 
-  if (frame % branchesWork.spawnRate < 1) {
-    const activePathCount = branchesWork.branches.length + 1;
-    const pathChoice = branchesWork.spawnCounter % activePathCount;
-    branchesWork.spawnCounter++;
+  let linkCount = 0;
+  if (empathy.isLinked[0][1]) linkCount++;
+  if (empathy.isLinked[1][2]) linkCount++;
+  if (empathy.isLinked[0][2]) linkCount++;
 
-    const c = new FlowCircle();
-    if (pathChoice > 0 && branchesWork.state !== 2) {
-      c.isRebel = true;
-      c.activeBranch = branchesWork.branches[pathChoice - 1];
-    }
+  empathy.globalGlow = lerp(empathy.globalGlow, linkCount / 3, 0.05);
+  drawBaseBackground(empathy.globalGlow);
 
-    branchesWork.circles.push(c);
+  // La figura 0 marca el pulso de referencia para el fondo atmosferico.
+  const globalPhase = empathy.entities[0].phase;
+
+  for (const bg of empathy.bgShapes) {
+    bg.update(stage);
+    bg.display(globalPhase);
   }
 
-  ctx.strokeStyle = "rgba(255,255,255,0.035)";
-  ctx.lineWidth = 1;
-  line(branchesWork.start.x, branchesWork.start.y, branchesWork.end.x, branchesWork.end.y);
+  updateEmpathyLinks();
+  updateEmpathyGroupFrequencies();
 
-  for (let i = branchesWork.circles.length - 1; i >= 0; i--) {
-    const c = branchesWork.circles[i];
-    c.update();
-    c.display();
-    if (c.dead) branchesWork.circles.splice(i, 1);
-  }
-
-  for (const b of branchesWork.branches) {
-    b.update();
-    b.display();
-  }
-
-  if (branchesWork.squareActive) updateAndDrawBranchSquare();
-
-  handleBranchReset();
-}
-
-function updateAndDrawBranchSquare() {
-  branchesWork.squarePos.x = lerp(branchesWork.squarePos.x, pointer.x, 0.15);
-  branchesWork.squarePos.y = lerp(branchesWork.squarePos.y, pointer.y, 0.15);
-
-  const d = dist(pointer.x, pointer.y, branchesWork.prevMouse.x, branchesWork.prevMouse.y);
-  branchesWork.shakeIntensity = lerp(branchesWork.shakeIntensity, d, 0.1);
-  branchesWork.prevMouse.x = pointer.x;
-  branchesWork.prevMouse.y = pointer.y;
-
-  if (branchesWork.shakeIntensity > 5) {
-    branchesWork.hueVal = (branchesWork.hueVal + branchesWork.shakeIntensity * 0.4) % 360;
-  }
-
-  const col = hsbToRgb(branchesWork.hueVal, 40, 95);
-
-  ctx.strokeStyle = rgba(col, 0.4);
-  ctx.lineWidth = 2 + branchesWork.shakeIntensity * 0.2;
-  rectCenterStroke(
-    branchesWork.squarePos.x,
-    branchesWork.squarePos.y,
-    24 + branchesWork.shakeIntensity * 0.5,
-    24 + branchesWork.shakeIntensity * 0.5
-  );
-
-  ctx.fillStyle = rgba(col, 1);
-  rectCenter(branchesWork.squarePos.x, branchesWork.squarePos.y, 16, 16);
-}
-
-function handleBranchReset() {
-  if (branchesWork.state !== 2) return;
-
-  branchesWork.colorResetFactor = lerp(branchesWork.colorResetFactor, 0, 0.02);
-
-  let clean = true;
-
-  for (const b of branchesWork.branches) {
-    b.currentClick.x = lerp(b.currentClick.x, branchesWork.end.x, 0.04);
-    b.currentClick.y = lerp(b.currentClick.y, branchesWork.end.y, 0.04);
-    b.currentExit.x = lerp(b.currentExit.x, branchesWork.end.x, 0.04);
-    b.currentExit.y = lerp(b.currentExit.y, branchesWork.end.y, 0.04);
-
-    if (dist(b.currentClick.x, b.currentClick.y, branchesWork.end.x, branchesWork.end.y) > 10) clean = false;
-  }
-
-  if (clean && branchesWork.colorResetFactor < 0.01) {
-    branchesWork.branches = [];
-
-    for (const c of branchesWork.circles) {
-      if (c.isRebel) c.dead = true;
-    }
-
-    branchesWork.state = 0;
-    branchesWork.colorResetFactor = 1;
+  for (let i = 0; i < empathy.entities.length; i++) {
+    const e = empathy.entities[i];
+    e.updatePhysics();
+    e.display(i);
   }
 }
 
-function branchesTouch(x, y) {
-  if (branchesWork.state === 0) {
-    if (branchesWork.branches.length >= 5) {
-      branchesWork.state = 2;
-      return;
+function empathyMousePressed(x, y) {
+  for (const e of empathy.entities) {
+    if (dist(x, y, e.pos.x, e.pos.y) < Math.max(35, e.size)) {
+      empathy.dragged = e;
+      break;
     }
-
-    branchesWork.squareActive = true;
-    const border = Math.floor(random(0, 4));
-
-    if (border === 0) branchesWork.squarePos = vec(random(0, W), -20);
-    else if (border === 1) branchesWork.squarePos = vec(random(0, W), H + 20);
-    else if (border === 2) branchesWork.squarePos = vec(-20, random(0, H));
-    else branchesWork.squarePos = vec(W + 20, random(0, H));
-
-    branchesWork.prevMouse = vec(x, y);
-    branchesWork.state = 1;
-  } else if (branchesWork.state === 1) {
-    branchesWork.squareActive = false;
-
-    const ap = sub(branchesWork.squarePos, branchesWork.start);
-    const ab = normalize(sub(branchesWork.end, branchesWork.start));
-    let d = dot(ap, ab);
-    d = clamp(d, 50, dist(branchesWork.start.x, branchesWork.start.y, branchesWork.end.x, branchesWork.end.y) - 100);
-
-    const breakPoint = add(branchesWork.start, mult(ab, d));
-    const dir = normalize(sub(branchesWork.squarePos, breakPoint));
-    const exit = add(branchesWork.squarePos, mult(dir, 1000));
-
-    const hue = branchesWork.hues[branchesWork.hueIndex];
-    branchesWork.lastHue = hue;
-    const col = hsbToRgb(hue, 40, 95);
-
-    branchesWork.hueIndex++;
-
-    if (branchesWork.hueIndex >= branchesWork.hues.length) {
-      shuffle(branchesWork.hues);
-      while (branchesWork.hues[0] === branchesWork.lastHue) shuffle(branchesWork.hues);
-      branchesWork.hueIndex = 0;
-    }
-
-    branchesWork.branches.push(new BranchPath(breakPoint, clone(branchesWork.squarePos), exit, dir, col));
-    branchesWork.state = 0;
   }
+}
+
+function empathyMouseReleased() {
+  empathy.dragged = null;
 }
 
 //------------------------------------
-// 3. Ruptura de la linea - cuadrados
+// 3. Identidad: Reafirmacion (cambio directo y area suave)
 //------------------------------------
-const rupture = {
-  squares: [],
+const identity = {
+  shapes: [],
   particles: [],
-  flowSpeed: 0.003,
-  spawnRate: 14,
-  start: vec(80, 90),
-  end: vec(W - 80, H - 80),
-  breakPoint: vec(W / 2, H / 2),
-  targetPoint: vec(0, 0),
-  newEnd: vec(0, 0),
-  state: 0,
-  activeColor: [110, 115, 125],
-  spawnColored: false,
-  selected: null,
-  breakT: 0,
-  stopFactor: 0,
-  pathMorphFactor: 0,
-  colorResetFactor: 1,
-  timerStart: 0,
-  timerDuration: 9000,
-  shakeProgress: 0,
-  shakeTarget: 150,
-  colors: [
-    [255, 183, 178],
-    [255, 218, 193],
-    [226, 240, 203],
-    [191, 252, 198],
-    [199, 206, 234],
-    [255, 154, 162],
-    [232, 197, 229],
-    [175, 228, 222],
-    [252, 225, 212]
-  ]
+  current: 0, // 0 = triangulo, 1 = cuadrado, 2 = circulo
+  masked: false,
+  maskTimer: 0,
+  maskDuration: 5000,
+  cooldownTimer: -Infinity,
+  cooldownDuration: 1500,
+  pulseScale: 1,
+  dragged: null,
+  colors: {
+    triangle: [255, 183, 178],
+    square: [199, 206, 234],
+    circle: [175, 228, 222]
+  }
 };
 
-class RuptureSquare {
-  constructor() {
-    this.t = 0;
-    this.pos = vec(0, 0);
-    this.baseColor = [110, 115, 125];
-    this.isColored = rupture.spawnColored;
-    this.isFollower = false;
+class IdentityShape {
+  constructor(type, x, y) {
+    this.type = type; // 1 = cuadrado, 2 = circulo
+    this.pos = vec(x, y);
+    this.vel = randomVec(random(0.5, 1.5));
+    this.size = 24;
     this.angle = random(0, Math.PI * 2);
-    this.size = 14;
-
-    if (this.isColored) this.isFollower = Math.random() > 0.4;
+    this.dragging = false;
   }
 
-  update() {
-    this.angle += 0.01;
-
-    if (this.isColored && (rupture.state === 1 || rupture.state === 2)) {
-      this.t += rupture.flowSpeed * (1 - rupture.stopFactor);
+  update(stage, cx, cy, influenceRadius) {
+    if (this.dragging) {
+      this.pos.x = pointer.x;
+      this.pos.y = pointer.y;
+      this.vel.x = 0;
+      this.vel.y = 0;
     } else {
-      this.t += rupture.flowSpeed;
+      this.pos.x += this.vel.x;
+      this.pos.y += this.vel.y;
+      this.vel.x *= 0.92;
+      this.vel.y *= 0.92;
+
+      // Flotacion aleatoria suave
+      if (Math.hypot(this.vel.x, this.vel.y) < 0.5) {
+        const g = randomVec(0.2);
+        this.vel.x += g.x;
+        this.vel.y += g.y;
+      }
+
+      // Rebote en los bordes del escenario
+      const left = stage.x + 20;
+      const right = stage.x + stage.width - 20;
+      const top = stage.y + 20;
+      const bottom = stage.y + stage.height - 20;
+
+      if (this.pos.x < left) {
+        this.pos.x = left;
+        this.vel.x *= -1;
+      }
+      if (this.pos.x > right) {
+        this.pos.x = right;
+        this.vel.x *= -1;
+      }
+      if (this.pos.y < top) {
+        this.pos.y = top;
+        this.vel.y *= -1;
+      }
+      if (this.pos.y > bottom) {
+        this.pos.y = bottom;
+        this.vel.y *= -1;
+      }
+
+      // Escudo invisible: evita que entren solas flotando
+      const d = dist(this.pos.x, this.pos.y, cx, cy);
+      if (d > influenceRadius && d < influenceRadius + 25) {
+        const repel = normalize(sub(this.pos, vec(cx, cy)));
+        this.vel.x += repel.x * 1.5;
+        this.vel.y += repel.y * 1.5;
+      }
     }
 
-    const orig = this.originalPath(this.t);
-    const frozen = vec(0, 0);
-
-    if (this.t < rupture.breakT) {
-      const norm = rupture.breakT > 0 ? this.t / rupture.breakT : 0;
-      frozen.x = lerp(rupture.start.x, rupture.breakPoint.x, norm);
-      frozen.y = lerp(rupture.start.y, rupture.breakPoint.y, norm) + Math.sin(this.t * Math.PI * 4) * 8;
-    } else {
-      frozen.x = rupture.breakPoint.x;
-      frozen.y = rupture.breakPoint.y;
-    }
-
-    const alt = this.brokenPath(this.t);
-    const base = vec(orig.x, orig.y);
-
-    if (this.isColored) {
-      base.x = lerp(orig.x, frozen.x, rupture.stopFactor);
-      base.y = lerp(orig.y, frozen.y, rupture.stopFactor);
-    }
-
-    if (this.isFollower) {
-      this.pos.x = lerp(base.x, alt.x, rupture.pathMorphFactor);
-      this.pos.y = lerp(base.y, alt.y, rupture.pathMorphFactor);
-    } else {
-      this.pos.x = lerp(base.x, orig.x, rupture.pathMorphFactor);
-      this.pos.y = lerp(base.y, orig.y, rupture.pathMorphFactor);
-    }
+    this.angle += this.type === 1 ? 0.02 : 0.01;
   }
 
   display() {
-    let finalColor = this.baseColor;
-    let gradient = false;
-
-    if (this.isColored && this.isFollower) {
-      gradient = true;
-      finalColor =
-        rupture.state === 4
-          ? lerpColorArray(this.baseColor, rupture.activeColor, rupture.colorResetFactor)
-          : rupture.activeColor;
-    }
+    const col = this.type === 1 ? identity.colors.square : identity.colors.circle;
 
     ctx.save();
     ctx.translate(this.pos.x, this.pos.y);
     ctx.rotate(this.angle);
 
-    if (gradient) {
-      for (let j = 0; j < this.size; j++) {
-        const t = j / this.size;
-        const col = lerpColorArray(finalColor, [255, 255, 255], 0.45 * t);
-        ctx.strokeStyle = rgba(col, 1);
-        line(-this.size / 2, -this.size / 2 + j, this.size / 2, -this.size / 2 + j);
-      }
+    // Efecto luminoso, igual recurso que usa Incertidumbre/Ansiedad/Expectativa
+    ctx.shadowColor = rgba(col, 0.9);
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = rgba(col, 0.82);
 
-      ctx.strokeStyle = "rgba(255,255,255,0.18)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(-this.size / 2, -this.size / 2, this.size, this.size);
+    if (this.type === 1) {
+      rectCenter(0, 0, this.size, this.size);
     } else {
-      ctx.fillStyle = rgba(finalColor, 1);
-      ctx.strokeStyle = "rgba(255,255,255,0.12)";
-      ctx.lineWidth = 1.5;
-      ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
-      ctx.strokeRect(-this.size / 2, -this.size / 2, this.size, this.size);
+      circle(0, 0, this.size * 1.15);
     }
 
+    ctx.shadowBlur = 0;
     ctx.restore();
-  }
-
-  originalPath(t) {
-    return vec(
-      lerp(rupture.start.x, rupture.end.x, t),
-      lerp(rupture.start.y, rupture.end.y, t) + Math.sin(t * Math.PI * 4) * 8
-    );
-  }
-
-  brokenPath(t) {
-    if (t < rupture.breakT) {
-      const norm = rupture.breakT > 0 ? t / rupture.breakT : 0;
-      return vec(
-        lerp(rupture.start.x, rupture.breakPoint.x, norm),
-        lerp(rupture.start.y, rupture.breakPoint.y, norm) + Math.sin(t * Math.PI * 4) * 8
-      );
-    }
-
-    const norm = map(t, rupture.breakT, 1, 0, 1);
-    return vec(
-      lerp(rupture.breakPoint.x, rupture.newEnd.x, norm),
-      lerp(rupture.breakPoint.y, rupture.newEnd.y, norm) + Math.sin(t * Math.PI * 4) * 8
-    );
   }
 }
 
-class RuptureParticle {
+class IdentityParticle {
   constructor(x, y, color) {
-    this.x = x;
-    this.y = y;
-    this.vx = random(-4, 4);
-    this.vy = random(-4, 4);
-    this.size = random(2, 6);
+    this.pos = vec(x, y);
+    // Expansion radial
+    this.vel = randomVec(random(3, 10));
+    this.size = random(4, 10);
     this.alpha = 1;
     this.color = color;
-    this.decay = random(0.012, 0.032);
   }
 
   update() {
-    this.x += this.vx;
-    this.y += this.vy;
-    this.alpha -= this.decay;
+    this.pos.x += this.vel.x;
+    this.pos.y += this.vel.y;
+    this.vel.x *= 0.85; // Friccion en el aire
+    this.vel.y *= 0.85;
+    this.alpha -= 0.02; // Desvanecimiento
   }
 
   display() {
-    ctx.fillStyle = rgba(this.color, this.alpha);
-    circle(this.x, this.y, this.size);
+    ctx.fillStyle = rgba(this.color, Math.max(this.alpha, 0));
+    circle(this.pos.x, this.pos.y, this.size);
   }
 }
 
 function initRupture() {
-  rupture.squares = [];
-  rupture.particles = [];
+  identity.shapes = [];
+  identity.particles = [];
+  identity.current = 0;
+  identity.masked = false;
+  identity.maskTimer = 0;
+  identity.cooldownTimer = -Infinity;
+  identity.pulseScale = 1;
+  identity.dragged = null;
 
   const stage = getStage();
-  rupture.start = vec(stage.x + 30, stage.y + 20);
-  rupture.end = vec(stage.x + stage.width - 30, stage.y + stage.height - 20);
-  rupture.breakPoint = vec(stage.x + stage.width / 2, stage.y + stage.height / 2);
-  rupture.targetPoint = vec(0, 0);
-  rupture.newEnd = vec(0, 0);
-  rupture.state = 0;
-  rupture.activeColor = [110, 115, 125];
-  rupture.spawnColored = false;
-  rupture.selected = null;
-  rupture.breakT = 0;
-  rupture.stopFactor = 0;
-  rupture.pathMorphFactor = 0;
-  rupture.colorResetFactor = 1;
-  rupture.shakeProgress = 0;
+
+  // 12 cuadrados arriba y 12 circulos abajo, flotando fuera del centro
+  for (let i = 0; i < 12; i++) {
+    identity.shapes.push(
+      new IdentityShape(
+        1,
+        random(stage.x + 20, stage.x + stage.width - 20),
+        random(stage.y + 20, stage.y + stage.height * 0.28)
+      )
+    );
+    identity.shapes.push(
+      new IdentityShape(
+        2,
+        random(stage.x + 20, stage.x + stage.width - 20),
+        random(stage.y + stage.height * 0.72, stage.y + stage.height - 20)
+      )
+    );
+  }
+}
+
+function createIdentityExplosion(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    identity.particles.push(new IdentityParticle(x, y, color));
+  }
+}
+
+// Dibuja la silueta (triangulo/cuadrado/circulo) del tamaño pedido
+// usando el fillStyle ya seteado por quien llama.
+function fillIdentityGlyph(type, size) {
+  if (type === 0) {
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.lineTo(size * 0.866, size * 0.5);
+    ctx.lineTo(-size * 0.866, size * 0.5);
+    ctx.closePath();
+    ctx.fill();
+  } else if (type === 1) {
+    rectCenter(0, 0, size * 1.7, size * 1.7);
+  } else {
+    circle(0, 0, size * 1.9);
+  }
+}
+
+// Zona de influencia: contorno circular celeste (sin relleno).
+function drawIdentityZone(cx, cy, radius, masked) {
+  const celeste = [140, 205, 235];
+
+  ctx.strokeStyle = rgba(celeste, masked ? 0.45 : 0.3);
+  ctx.lineWidth = 1.5;
+  strokeCircle(cx, cy, radius * 2);
 }
 
 function drawRupture(frame, now) {
-  drawBaseBackground(0);
+  const stage = getStage();
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
+  const minSide = Math.min(stage.width, stage.height);
+  const R = minSide * 0.115;
+  const influenceRadius = minSide * 0.28;
 
-  if (frame % rupture.spawnRate < 1) {
-    rupture.squares.push(new RuptureSquare());
+  drawBaseBackground(identity.masked ? 0.35 : 0);
+
+  // Zona de influencia (contorno circular celeste)
+  drawIdentityZone(cx, cy, influenceRadius, identity.masked);
+
+  // Analizar la presion externa
+  let countSq = 0;
+  let countCir = 0;
+
+  for (const s of identity.shapes) {
+    if (dist(s.pos.x, s.pos.y, cx, cy) < influenceRadius) {
+      if (s.type === 1) countSq++;
+      else countCir++;
+    }
   }
 
-  ctx.strokeStyle = "rgba(255,255,255,0.035)";
-  ctx.lineWidth = 1;
-  line(rupture.start.x, rupture.start.y, rupture.end.x, rupture.end.y);
+  // Logica de cambio directo y reafirmacion
+  if (!identity.masked) {
+    // Solo puede cambiar si no esta en tiempo de inmunidad
+    if (now - identity.cooldownTimer > identity.cooldownDuration) {
+      if (countSq >= 4) {
+        identity.current = 1; // Se vuelve cuadrado
+        identity.masked = true;
+        identity.maskTimer = now;
+        identity.pulseScale = 1.4;
+        createIdentityExplosion(cx, cy, identity.colors.square, 40);
+      } else if (countCir >= 4) {
+        identity.current = 2; // Se vuelve circulo
+        identity.masked = true;
+        identity.maskTimer = now;
+        identity.pulseScale = 1.4;
+        createIdentityExplosion(cx, cy, identity.colors.circle, 40);
+      }
+    }
+  } else {
+    // Si tiene identidad falsa, cuenta el tiempo de mascara
+    if (now - identity.maskTimer >= identity.maskDuration) {
+      // Reafirmacion: vuelve a ser triangulo
+      identity.current = 0;
+      identity.masked = false;
+      identity.pulseScale = 1.8;
 
-  if (rupture.state === 1) {
-    const d = dist(pointer.x, pointer.y, rupture.breakPoint.x, rupture.breakPoint.y);
+      // Activar inmunidad para evitar bugs de re-transformacion
+      identity.cooldownTimer = now;
 
-    if (d < 50) {
-      const speed = dist(pointer.x, pointer.y, pointer.px, pointer.py);
+      createIdentityExplosion(cx, cy, identity.colors.triangle, 80);
 
-      if (speed > 10) {
-        rupture.shakeProgress += speed * 0.15;
-
-        if (frame % 3 < 1) {
-          rupture.activeColor = randomFrom(rupture.colors);
-          createRuptureExplosion(rupture.breakPoint.x, rupture.breakPoint.y, rupture.activeColor, 2);
-        }
-
-        if (rupture.shakeProgress >= rupture.shakeTarget) {
-          createRuptureExplosion(rupture.breakPoint.x, rupture.breakPoint.y, rupture.activeColor, 35);
-          rupture.state = 2;
+      // Expulsar a las figuras que estan cerca del centro
+      for (const s of identity.shapes) {
+        const d = dist(s.pos.x, s.pos.y, cx, cy);
+        if (d < influenceRadius + 50) {
+          let push = sub(s.pos, vec(cx, cy));
+          if (Math.hypot(push.x, push.y) === 0) push = randomVec(1);
+          push = normalize(push);
+          s.vel.x += push.x * 6;
+          s.vel.y += push.y * 6;
         }
       }
     }
   }
 
-  if (rupture.state === 3) {
-    ctx.strokeStyle = rgba(rupture.activeColor, 0.12);
-    ctx.lineWidth = 1;
-    line(rupture.start.x, rupture.start.y, rupture.breakPoint.x, rupture.breakPoint.y);
-    line(rupture.breakPoint.x, rupture.breakPoint.y, rupture.newEnd.x, rupture.newEnd.y);
-  }
+  // Suavizar el latido (vuelve a escala 1.0)
+  identity.pulseScale = lerp(identity.pulseScale, 1, 0.1);
 
-  for (let i = rupture.squares.length - 1; i >= 0; i--) {
-    const s = rupture.squares[i];
-    s.update();
+  // Dibujar la identidad central
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(identity.pulseScale, identity.pulseScale);
+
+  const currentColor =
+    identity.current === 1
+      ? identity.colors.square
+      : identity.current === 2
+      ? identity.colors.circle
+      : identity.colors.triangle;
+
+  // Luz neutra (blanquecina) en vez de un brillo intenso del color
+  // propio de la figura, mismo recurso (shadowBlur) que el resto de
+  // las figuras de esta pantalla.
+  ctx.shadowColor = "rgba(255, 255, 255, 0.65)";
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = rgba(currentColor, 0.88);
+  fillIdentityGlyph(identity.current, R);
+  ctx.shadowBlur = 0;
+
+  // Detalle poetico: el "corazon" interno triangular
+  const innerPulse = 1 + 0.15 * Math.sin(frame * 0.1);
+  ctx.scale(0.25 * innerPulse, 0.25 * innerPulse);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.78)";
+  ctx.beginPath();
+  ctx.moveTo(0, -R);
+  ctx.lineTo(R * 0.866, R * 0.5);
+  ctx.lineTo(-R * 0.866, R * 0.5);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+
+  // Actualizar y dibujar las figuras externas
+  for (const s of identity.shapes) {
+    s.update(stage, cx, cy, influenceRadius);
     s.display();
-
-    const stage = getStage();
-    const out =
-      s.pos.x < stage.x - 80 ||
-      s.pos.x > stage.x + stage.width + 80 ||
-      s.pos.y < stage.y - 80 ||
-      s.pos.y > stage.y + stage.height + 80;
-    if (s.t >= 1 || out) rupture.squares.splice(i, 1);
   }
 
-  for (let i = rupture.particles.length - 1; i >= 0; i--) {
-    const p = rupture.particles[i];
+  // Particulas
+  for (let i = identity.particles.length - 1; i >= 0; i--) {
+    const p = identity.particles[i];
     p.update();
     p.display();
-    if (p.alpha <= 0) rupture.particles.splice(i, 1);
+    if (p.alpha <= 0) identity.particles.splice(i, 1);
   }
-
-  handleRuptureTransitions(now);
 }
 
 function ruptureMousePressed(x, y) {
-  if (rupture.state === 0) {
-    if (rupture.squares.length === 0) return;
+  let minDist = 30;
+  identity.dragged = null;
 
-    let minD = Infinity;
-    let closest = null;
-
-    for (const s of rupture.squares) {
-      const d = dist(x, y, s.pos.x, s.pos.y);
-      if (d < minD && d < 45) {
-        minD = d;
-        closest = s;
-      }
+  for (const s of identity.shapes) {
+    const d = dist(x, y, s.pos.x, s.pos.y);
+    if (d < minDist) {
+      minDist = d;
+      identity.dragged = s;
     }
-
-    if (closest) {
-      rupture.selected = closest;
-      rupture.breakT = closest.t;
-      rupture.activeColor = [161, 161, 170];
-
-      for (const s of rupture.squares) {
-        if (s.t <= rupture.breakT) {
-          s.isColored = true;
-          s.isFollower = true;
-        }
-      }
-
-      rupture.spawnColored = true;
-      rupture.state = 1;
-      rupture.stopFactor = 0;
-    }
-  } else if (rupture.state === 2) {
-    rupture.targetPoint = vec(x, y);
-
-    let dir = normalize(sub(rupture.targetPoint, rupture.breakPoint));
-    dir = mult(dir, -1);
-
-    const originalLength = dist(rupture.start.x, rupture.start.y, rupture.end.x, rupture.end.y);
-    const remaining = originalLength * (1 - rupture.breakT);
-
-    rupture.newEnd = add(rupture.breakPoint, mult(dir, remaining * 1.5));
-
-    createRuptureExplosion(rupture.breakPoint.x, rupture.breakPoint.y, rupture.activeColor, 40);
-
-    rupture.state = 3;
-    rupture.timerStart = performance.now();
   }
+
+  if (identity.dragged) identity.dragged.dragging = true;
 }
 
-function handleRuptureTransitions(now) {
-  if (rupture.state === 1 || rupture.state === 2) {
-    rupture.stopFactor = lerp(rupture.stopFactor, 1, 0.05);
-  }
-
-  if (rupture.state === 3) {
-    rupture.pathMorphFactor = lerp(rupture.pathMorphFactor, 1, 0.06);
-
-    if (now - rupture.timerStart >= rupture.timerDuration) {
-      rupture.state = 4;
-      rupture.spawnColored = false;
-    }
-  } else if (rupture.state === 4) {
-    rupture.pathMorphFactor = lerp(rupture.pathMorphFactor, 0, 0.03);
-    rupture.stopFactor = lerp(rupture.stopFactor, 0, 0.03);
-    rupture.colorResetFactor = lerp(rupture.colorResetFactor, 0, 0.02);
-
-    if (rupture.pathMorphFactor < 0.01 && rupture.stopFactor < 0.01 && rupture.colorResetFactor < 0.01) {
-      initRupture();
-    }
-  }
-}
-
-function createRuptureExplosion(x, y, color, count) {
-  for (let i = 0; i < count; i++) {
-    rupture.particles.push(new RuptureParticle(x, y, color));
-  }
+function ruptureMouseReleased() {
+  if (identity.dragged) identity.dragged.dragging = false;
+  identity.dragged = null;
 }
 
 //------------------------------------
 // Loop
 //------------------------------------
 initSynergy();
-initBranches();
+initEmpathy();
 initRupture();
 
 //------------------------------------
@@ -1319,7 +1444,7 @@ if (works.includes(estadoInicial)) {
 // Modo miniatura (?mini=1)
 // Oculta los botones y simula la interacción
 // llamando a las mismas funciones que usa un
-// click/touch real (branchesTouch, ruptureMousePressed),
+// click/touch real (empathyMousePressed/Released, ruptureMousePressed),
 // solo que disparadas por un timer en vez de la mano.
 //------------------------------------
 const isMini = urlParams.get("mini") === "1";
@@ -1331,66 +1456,126 @@ if (isMini) {
   const clickIntervalMin = clickCfg.intervalMin ?? 5000;
   const clickIntervalMax = clickCfg.intervalMax ?? 6000;
 
-  // Sinergias ya se anima sola (sin necesidad de simular nada).
-
-  // Ramas: completa una rama nueva cada tanto (ritmo configurable)
-  function scheduleBranchClick() {
+  // Colaboracion: como ahora la unión depende de arrastrar una figura
+  // hasta otra, acá simulamos ese "arrastre y suelte" moviendo una
+  // figura junto a otra compatible y disparando la misma lógica que
+  // usa el mouseup real (resolveSynergyDrop), en vez de animarla sola.
+  function scheduleSynergyMerge() {
     const wait = random(clickIntervalMin, clickIntervalMax);
 
     setTimeout(() => {
-      if (currentWork === "ramas" && branchesWork.branches.length < 5) {
-        const stage = getStage();
-        const x = random(stage.x + 30, stage.x + stage.width - 30);
-        const y = random(stage.y + 30, stage.y + stage.height - 30);
-
-        branchesTouch(x, y); // define el punto de salida
-        setTimeout(() => branchesTouch(x, y), 180); // confirma la rama
-      }
-
-      scheduleBranchClick();
+      if (currentWork === "sinergias") simulateSynergyStep();
+      scheduleSynergyMerge();
     }, wait);
   }
 
-  scheduleBranchClick();
+  function simulateSynergyStep() {
+    // Prioridad 1: unir dos figuras sueltas del mismo tipo
+    const loose = synergy.shapes.filter((s) => !s.isControlNode && !s.grouped);
 
-  // Ruptura: selecciona un cuadrado de la línea automáticamente
-  // (mismo ritmo configurable que el resto de los clicks)
-  function scheduleRuptureClick() {
+    if (loose.length >= 2) {
+      const a = randomFrom(loose);
+      const candidates = loose.filter((s) => s !== a && s.type === a.type);
+
+      if (candidates.length > 0) {
+        const b = randomFrom(candidates);
+        a.pos.x = b.pos.x + random(-40, 40);
+        a.pos.y = b.pos.y + random(-40, 40);
+        resolveSynergyDrop(a);
+        return;
+      }
+    }
+
+    // Prioridad 2: sumar una figura suelta a un grupo ya formado
+    const controlNodes = synergy.shapes.filter((s) => s.isControlNode);
+
+    if (controlNodes.length > 0 && loose.length > 0) {
+      const target = randomFrom(controlNodes);
+      const groupTypes = new Set(synergy.shapes.filter((s) => s.groupId === target.linkedGroupId && !s.isControlNode).map((s) => s.type));
+      const matching = loose.filter((s) => groupTypes.has(s.type));
+
+      if (matching.length > 0) {
+        const a = randomFrom(matching);
+        a.pos.x = target.pos.x + random(-30, 30);
+        a.pos.y = target.pos.y + random(-30, 30);
+        resolveSynergyDrop(a);
+        return;
+      }
+    }
+
+    // Prioridad 3: con al menos dos círculos de control sueltos, armar el súper aro
+    const freeCircles = controlNodes.filter((c) => !synergy.superRing.includes(c));
+
+    if (freeCircles.length >= 2) {
+      const a = randomFrom(freeCircles);
+      const b = randomFrom(freeCircles.filter((c) => c !== a));
+      a.pos.x = b.pos.x + random(-20, 20);
+      a.pos.y = b.pos.y + random(-20, 20);
+      resolveSynergyDrop(a);
+    }
+  }
+
+  scheduleSynergyMerge();
+
+  // Empatia: cada tanto empuja dos figuras a acercarse (para que se
+  // vinculen) o, si ya estan vinculadas, a separarse (para mostrar
+  // tambien la ruptura), como si alguien las guiara una hacia la
+  // otra en vez de dejarlas solo a la deriva.
+  function scheduleEmpathyCycle() {
     const wait = random(clickIntervalMin, clickIntervalMax);
 
     setTimeout(() => {
-      if (currentWork === "ruptura") {
-        if (rupture.state === 0 && rupture.squares.length > 0) {
-          const target = randomFrom(rupture.squares);
-          ruptureMousePressed(target.pos.x, target.pos.y);
-        } else if (rupture.state === 2) {
-          const angle = Math.random() * Math.PI * 2;
-          const tx = rupture.breakPoint.x + Math.cos(angle) * 220;
-          const ty = rupture.breakPoint.y + Math.sin(angle) * 220;
-          ruptureMousePressed(tx, ty);
+      if (currentWork === "ramas" && empathy.entities.length === 3) {
+        const i = Math.floor(random(0, 3));
+        let j = Math.floor(random(0, 3));
+        while (j === i) j = Math.floor(random(0, 3));
+
+        const a = empathy.entities[i];
+        const b = empathy.entities[j];
+        const dir = normalize(sub(b.pos, a.pos));
+        const push = empathy.isLinked[i][j] && Math.random() < 0.4 ? -2.2 : 2.2;
+
+        a.vel.x += dir.x * push;
+        a.vel.y += dir.y * push;
+        b.vel.x -= dir.x * push;
+        b.vel.y -= dir.y * push;
+      }
+
+      scheduleEmpathyCycle();
+    }, wait);
+  }
+
+  scheduleEmpathyCycle();
+
+  // Identidad: cada tanto sopla un "viento" suave que acerca al
+  // centro un grupo de figuras del mismo tipo, para que la miniatura
+  // muestre la reafirmación sin depender del azar de la flotación
+  // libre (mismo ritmo configurable que el resto de los clicks).
+  function scheduleIdentityGust() {
+    const wait = random(clickIntervalMin, clickIntervalMax);
+
+    setTimeout(() => {
+      if (currentWork === "ruptura" && !identity.masked) {
+        const stage = getStage();
+        const cx = stage.x + stage.width / 2;
+        const cy = stage.y + stage.height / 2;
+        const type = Math.random() < 0.5 ? 1 : 2;
+        const candidates = identity.shapes.filter((s) => s.type === type && !s.dragging);
+
+        shuffle(candidates);
+
+        for (const s of candidates.slice(0, 5)) {
+          const dir = normalize(sub(vec(cx, cy), s.pos));
+          s.vel.x += dir.x * 2.2;
+          s.vel.y += dir.y * 2.2;
         }
       }
 
-      scheduleRuptureClick();
+      scheduleIdentityGust();
     }, wait);
   }
 
-  scheduleRuptureClick();
-
-  // Ruptura: mientras está "agarrado" (state 1), simula el
-  // puntero temblando cerca del punto de quiebre -- es
-  // exactamente la condición que usa el código real para
-  // acumular el "shake" y disparar la ruptura. Esto no es un
-  // click nuevo sino la textura de un gesto ya en curso, así
-  // que mantiene su propio ritmo rápido y no usa la config.
-  setInterval(() => {
-    if (currentWork === "ruptura" && rupture.state === 1) {
-      pointer.px = pointer.x;
-      pointer.py = pointer.y;
-      pointer.x = rupture.breakPoint.x + random(-30, 30);
-      pointer.y = rupture.breakPoint.y + random(-30, 30);
-    }
-  }, 40);
+  scheduleIdentityGust();
 }
 
 let frame = 0;
@@ -1400,7 +1585,7 @@ function animate(now = performance.now()) {
   frame++;
 
   if (currentWork === "sinergias") drawSynergy(frame);
-  if (currentWork === "ramas") drawBranches(frame);
+  if (currentWork === "ramas") drawEmpathy();
   if (currentWork === "ruptura") drawRupture(frame, now);
 
   drawStageFrame();

@@ -23,13 +23,26 @@ let currentSystem = "memoria";
 let lastTap = 0;
 const aggressiveThreshold = 220;
 
+// Cambia el estado actual y deja el parámetro ?estado= de la URL
+// sincronizado (sin recargar la página), para que las flechas de
+// subsystem-nav.js sepan desde dónde partir en vez de quedarse con
+// el estado que había al cargar la página.
+function switchSystem(name) {
+  currentSystem = name;
+
+  const url = new URL(window.location.href);
+  url.searchParams.set("estado", name);
+  window.history.replaceState({}, "", url);
+}
+
+
 const memoryMarks = [];
 const memoryTrails = [];
 const memoryFlashes = [];
-const heritageLevels = [];
+const heritageNodes = [];
 const decayFigures = [];
 
-let totalHeritageNodes = 0;
+let familyCounter = 0;
 let buttons = [];
 
 // Estado del gesto "mantener apretado" de Memoria (viene del
@@ -90,14 +103,14 @@ window.addEventListener("touchend", () => {
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
 
-  if (key === "1") currentSystem = "memoria";
-  if (key === "2") currentSystem = "herencia";
-  if (key === "3") currentSystem = "caducidad";
+  if (key === "1") switchSystem("memoria");
+  if (key === "2") switchSystem("herencia");
+  if (key === "3") switchSystem("caducidad");
 
   if (key === "k") {
-    if (currentSystem === "memoria") currentSystem = "herencia";
-    else if (currentSystem === "herencia") currentSystem = "caducidad";
-    else currentSystem = "memoria";
+    if (currentSystem === "memoria") switchSystem("herencia");
+    else if (currentSystem === "herencia") switchSystem("caducidad");
+    else switchSystem("memoria");
   }
 });
 
@@ -115,7 +128,7 @@ function handlePressStart(x, y) {
   }
 
   if (currentSystem === "herencia") {
-    addHeritageNode(aggressive);
+    addHeritageNode(x, y);
   }
 
   if (currentSystem === "caducidad") {
@@ -179,7 +192,7 @@ function checkButtons(x, y) {
       y <= button.y + button.h;
 
     if (inside) {
-      currentSystem = button.system;
+      switchSystem(button.system);
       return true;
     }
   }
@@ -283,22 +296,13 @@ requestAnimationFrame(animate);
 //------------------------------------
 // Fondo común
 //------------------------------------
+// Fondo unificado de las 9 experiencias: delega en la única
+// implementación compartida (shared-background.js), la misma
+// que usan subsistema2.js y script.js.
 function drawBaseBackground() {
   const w = window.innerWidth;
   const h = window.innerHeight;
-  const cx = w / 2;
-  const cy = h / 2;
-
-  ctx.fillStyle = "#0b0a10";
-  ctx.fillRect(0, 0, w, h);
-
-  const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.7);
-  glow.addColorStop(0, "rgba(80, 38, 18, 0.16)");
-  glow.addColorStop(0.48, "rgba(38, 18, 20, 0.16)");
-  glow.addColorStop(1, "rgba(0, 0, 0, 0)");
-
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, w, h);
+  drawSharedBackground(ctx, w, h);
 }
 
 // Igual que getStage() en script.js/subsistema2.js: la "ventana" de
@@ -478,204 +482,406 @@ function drawMemory() {
 //------------------------------------
 // 2. Herencia
 //------------------------------------
+// Adaptado del sketch de Processing: en vez de un árbol binario de
+// posiciones fijas, cada click suelta un nodo en el lugar donde se
+// tocó. Si cae cerca de otro nodo "disponible" (que todavía no formó
+// pareja), ambos se combinan y aparece un hijo que mezcla su forma
+// y su color. Las familias envejecen: pasadas varias generaciones
+// sin renovarse, sus nodos se apagan a un gris cálido y se
+// desvanecen.
+//
+// Dos agregados sobre el sketch original:
+// 1) Los hijos ya emparejados (generación >= 2) siguen "disponibles":
+//    si con el tiempo dos hijos de familias distintas terminan cerca,
+//    se unen solos, sin necesidad de un click nuevo. Así las familias
+//    dejan de quedar como árboles aislados y se van entramando entre
+//    sí.
+// 2) De forma poco frecuente, un hijo puede salir "anómalo": una
+//    figura de otra forma y otro color (el mismo celeste con el que
+//    "Incertidumbre" marca sus propias anomalías), como si el linaje
+//    se torciera por un instante antes de seguir su curso normal.
+const grisCalido = "#78695f";
+const colorAnomalia = "#78c8ff";
+const probabilidadAnomalia = 0.045;
+
+// Distancia máxima para que dos nodos formen pareja y el desnivel
+// que separa a un hijo de sus padres, en la escala "de diseño"
+// (pensada para un escritorio de ~900px de ancho). heritageScale()
+// la reduce en mobile para que la dinámica no se salga del recuadro.
+const distanciaPareja = 130;
+const desnivelHijo = 80;
+const tamanoMinBase = 36;
+const tamanoMaxBase = 50;
+
+function heritageScale() {
+  const stage = getStage();
+  return clampNum(stage.width / 620, 0.55, 1);
+}
+
+function heritageMargin(scale) {
+  return (tamanoMaxBase * scale) / 2 + 10 * scale;
+}
+
 class HeritageNode {
-  constructor(x, y, size, type, color, colorIndex, parent) {
+  constructor(x, y, size, type, colorIndex, parent1, parent2, parent1PassesShape, generation, familyId) {
     this.x = x;
     this.y = y;
+    this.yTarget = y;
     this.size = size;
     this.type = type;
-    this.color = color;
     this.colorIndex = colorIndex;
-    this.parent = parent;
+    this.baseColor = palette[colorIndex];
+    this.currentColor = this.baseColor;
+    this.currentAlpha = 255;
+    this.isAnomaly = false;
+    // Cuánto queda del "gen" anómalo (triángulo/celeste) para seguir
+    // pasándolo a la próxima generación. 0 = no lo lleva. Se reduce a
+    // la mitad cada vez que se transmite, hasta perderse del todo.
+    this.anomalyGeneStrength = 0;
+
+    this.parent1 = parent1;
+    this.parent2 = parent2;
+    this.parent1PassesShape = parent1PassesShape;
+    this.available = true;
+
+    this.generation = generation;
+    this.familyId = familyId;
+    this.decayState = 0;
+
     this.birth = performance.now();
-    this.particleT = Math.random();
-    this.particleSpeed = random(0.006, 0.012);
+    this.particleT = 0;
+    this.particleSpeed = 0.012;
+  }
+
+  updatePosition() {
+    this.y = lerp(this.y, this.yTarget, 0.08);
+  }
+
+  updateDecay() {
+    let targetColor = this.baseColor;
+    let targetAlpha = 255;
+
+    if (this.decayState === 1) {
+      targetColor = grisCalido;
+      targetAlpha = 255;
+    } else if (this.decayState === 2) {
+      targetColor = grisCalido;
+      targetAlpha = 60;
+    } else if (this.decayState >= 3) {
+      targetColor = grisCalido;
+      targetAlpha = 0;
+    }
+
+    this.currentColor = lerpColorHex(this.currentColor, targetColor, 0.05);
+    this.currentAlpha = lerp(this.currentAlpha, targetAlpha, 0.05);
   }
 
   updateParticle() {
-    if (!this.parent) return;
-    this.particleT += this.particleSpeed;
-    if (this.particleT > 1) this.particleT = 0;
+    if (this.parent1 || this.parent2) {
+      this.particleT += this.particleSpeed;
+      if (this.particleT > 1) this.particleT = 0;
+    }
   }
 
   showLine() {
-    if (!this.parent) return;
+    if (this.currentAlpha <= 1) return;
 
-    ctx.strokeStyle = hexToRgba(this.color, 0.38);
     ctx.lineWidth = 1;
 
-    ctx.beginPath();
-    ctx.moveTo(this.parent.x, this.parent.y);
-    ctx.lineTo(this.x, this.y);
-    ctx.stroke();
+    if (this.parent1 && this.parent1.currentAlpha > 1) {
+      const a = (Math.min(this.currentAlpha, this.parent1.currentAlpha) / 255) * 0.4;
+      ctx.strokeStyle = hexToRgba(this.currentColor, a);
+      ctx.beginPath();
+      ctx.moveTo(this.parent1.x, this.parent1.y);
+      ctx.lineTo(this.x, this.y);
+      ctx.stroke();
+    }
+
+    if (this.parent2 && this.parent2.currentAlpha > 1) {
+      const a = (Math.min(this.currentAlpha, this.parent2.currentAlpha) / 255) * 0.4;
+      ctx.strokeStyle = hexToRgba(this.currentColor, a);
+      ctx.beginPath();
+      ctx.moveTo(this.parent2.x, this.parent2.y);
+      ctx.lineTo(this.x, this.y);
+      ctx.stroke();
+    }
   }
 
   showParticle() {
-    if (!this.parent) return;
+    if (this.currentAlpha <= 1) return;
+    if (this.parent1) this.drawLight(this.parent1, this.parent1PassesShape);
+    if (this.parent2) this.drawLight(this.parent2, !this.parent1PassesShape);
+  }
 
-    const px = lerp(this.parent.x, this.x, this.particleT);
-    const py = lerp(this.parent.y, this.y, this.particleT);
+  // Dibuja el pulso que viaja de un padre al hijo. Si ese padre fue
+  // quien "pasó su forma", el pulso queda grande y tenue (un rasgo
+  // diluido); si no, queda chico y sólido (el rasgo que predominó).
+  drawLight(donor, passedShape) {
+    if (donor.currentAlpha <= 1) return;
 
-    ctx.fillStyle = "rgba(223, 187, 145, 0.22)";
-    circle(px, py, 14);
+    const px = lerp(donor.x, this.x, this.particleT);
+    const py = lerp(donor.y, this.y, this.particleT);
+    const alphaMult = Math.min(this.currentAlpha, donor.currentAlpha) / 255;
 
-    ctx.fillStyle = "rgba(223, 187, 145, 0.86)";
-    circle(px, py, 6);
+    if (passedShape) {
+      ctx.fillStyle = hexToRgba(donor.currentColor, 0.32 * alphaMult);
+      drawShape(px, py, 15, donor.type);
+    } else {
+      ctx.fillStyle = hexToRgba(donor.currentColor, 1 * alphaMult);
+      drawShape(px, py, 11, donor.type);
+    }
   }
 
   show() {
+    this.updateDecay();
+    if (this.currentAlpha <= 1) return;
+
     const age = performance.now() - this.birth;
     const glow = Math.max(0, 1 - age / 450);
+    const alphaMult = this.currentAlpha / 255;
 
     ctx.save();
 
-    if (glow > 0) {
-      ctx.fillStyle = hexToRgba(this.color, 0.28 * glow);
-      drawShape(this.x, this.y, this.size * (1.55 + glow * 0.35), this.type);
+    // Las anomalías llevan un resplandor celeste propio, el mismo
+    // lenguaje que usa Incertidumbre para marcar lo que se sale de lo
+    // esperado.
+    if (this.isAnomaly) {
+      ctx.shadowColor = colorAnomalia;
+      ctx.shadowBlur = 16;
     }
 
-    ctx.fillStyle = this.color;
+    if (glow > 0) {
+      ctx.fillStyle = hexToRgba(this.currentColor, 0.28 * glow * alphaMult);
+      drawShape(this.x, this.y, this.size * (1.5 + glow * 0.4), this.type);
+    }
+
+    ctx.fillStyle = hexToRgba(this.currentColor, alphaMult);
     drawShape(this.x, this.y, this.size, this.type);
 
     ctx.restore();
   }
 }
 
-function addHeritageNode(aggressive) {
-  const maxLevels = isMobile ? 4 : 5;
+// Combina dos nodos disponibles en un hijo nuevo. Sirve tanto para
+// la pareja que se arma al soltar un click como para el cruce
+// espontáneo entre hijos de familias distintas.
+function pairHeritageNodes(nodeA, nodeB, scale, stage) {
+  const margen = heritageMargin(scale);
+  const sizeMin = tamanoMinBase * scale;
+  const sizeMax = tamanoMaxBase * scale;
 
-  let n = totalHeritageNodes;
-  let level = 0;
+  const aPasaForma = Math.random() < 0.5;
+  let hijoTipo, hijoColorIndex;
 
-  while (n >= Math.pow(2, level)) {
-    n -= Math.pow(2, level);
-    level++;
-  }
-
-  const index = n;
-
-  if (level >= maxLevels) return;
-
-  while (heritageLevels.length <= level) {
-    heritageLevels.push([]);
-  }
-
-  const nodesInLevel = Math.pow(2, level);
-
-  // En escritorio, igual que antes: los nodos se reparten en todo
-  // el ancho de la ventana. En mobile, ahora que la ventana de
-  // interacción es cuadrada (y más angosta que antes), los repartimos
-  // dentro de ese cuadrado para que no se salgan del recuadro.
-  const x = isMobile
-    ? (() => {
-        const stage = getStage();
-        return stage.x + (stage.width * (index + 1)) / (nodesInLevel + 1);
-      })()
-    : (window.innerWidth * (index + 1)) / (nodesInLevel + 1);
-
-  const topY = isMobile ? 120 : 115;
-  const levelHeight = isMobile ? 105 : 125;
-  const y = topY + level * levelHeight;
-
-  const rootSize = isMobile ? 48 : 60;
-  const size = rootSize * Math.pow(0.78, level);
-
-  let parent = null;
-
-  if (level > 0) {
-    parent = heritageLevels[level - 1][Math.floor(index / 2)];
-  }
-
-  let type;
-  let colorIndex;
-
-  if (level === 0) {
-    type = 0;
-    colorIndex = 0;
-  } else if (aggressive) {
-    type = 2;
-
-    do {
-      colorIndex = Math.floor(Math.random() * palette.length);
-    } while (colorIndex === parent.colorIndex);
+  if (aPasaForma) {
+    hijoTipo = nodeB.type;
+    hijoColorIndex = nodeA.colorIndex;
   } else {
-    const inheritsShape = Math.random() < 0.5;
-
-    if (inheritsShape) {
-      type = parent.type;
-
-      do {
-        colorIndex = Math.floor(Math.random() * palette.length);
-      } while (colorIndex === parent.colorIndex);
-    } else {
-      colorIndex = parent.colorIndex;
-
-      if (parent.type === 0) type = 1;
-      else if (parent.type === 1) type = 0;
-      else type = Math.floor(Math.random() * 2);
-    }
-
-    const existing = heritageLevels[level].length;
-
-    if (existing === nodesInLevel - 1) {
-      let allSame = true;
-
-      for (const node of heritageLevels[level]) {
-        if (node.type !== type) {
-          allSame = false;
-          break;
-        }
-      }
-
-      if (allSame) {
-        type = type === 0 ? 1 : 0;
-
-        if (type === parent.type) {
-          do {
-            colorIndex = Math.floor(Math.random() * palette.length);
-          } while (colorIndex === parent.colorIndex);
-        } else {
-          colorIndex = parent.colorIndex;
-        }
-      }
-    }
+    hijoTipo = nodeA.type;
+    hijoColorIndex = nodeB.colorIndex;
   }
 
-  const node = new HeritageNode(
-    x,
-    y,
-    size,
-    type,
-    palette[colorIndex],
-    colorIndex,
-    parent
+  const familiaActiva = nodeB.familyId;
+  nodeA.familyId = familiaActiva;
+  nodeA.generation = nodeB.generation;
+
+  const hijoXsinRecortar = (nodeA.x + nodeB.x) / 2;
+  const hijoX = clampNum(hijoXsinRecortar, stage.x + margen, stage.x + stage.width - margen);
+  const hijoY = Math.max(nodeA.yTarget, nodeB.yTarget) + desnivelHijo * scale;
+  const hijoGen = nodeB.generation + 1;
+  const hijoSize = random(sizeMin, sizeMax);
+
+  const hijo = new HeritageNode(
+    hijoX,
+    hijoY,
+    hijoSize,
+    hijoTipo,
+    hijoColorIndex,
+    nodeB,
+    nodeA,
+    aPasaForma,
+    hijoGen,
+    familiaActiva
   );
 
-  heritageLevels[level].push(node);
-  totalHeritageNodes++;
+  // Anomalía: de forma aleatoria, un eslabón puede mutar del todo, con
+  // una forma y un color ajenos a la paleta familiar.
+  if (Math.random() < probabilidadAnomalia) {
+    hijo.isAnomaly = true;
+    hijo.type = 2;
+    hijo.baseColor = colorAnomalia;
+    hijo.currentColor = colorAnomalia;
+    hijo.anomalyGeneStrength = 1;
+  } else {
+    // El triángulo anómalo también puede dejar algo de sí en el
+    // linaje de abajo: si alguno de los padres todavía carga ese
+    // "gen", por probabilidad pasa una parte suya (forma o color,
+    // no las dos) al hijo. La fuerza del gen se reduce a la mitad en
+    // cada transmisión, así el rasgo se va perdiendo generación tras
+    // generación hasta desaparecer.
+    const genDonor = nodeA.anomalyGeneStrength >= nodeB.anomalyGeneStrength ? nodeA : nodeB;
+    if (genDonor.anomalyGeneStrength > 0 && Math.random() < genDonor.anomalyGeneStrength) {
+      if (Math.random() < 0.5) {
+        hijo.type = 2;
+      } else {
+        hijo.baseColor = colorAnomalia;
+        hijo.currentColor = colorAnomalia;
+      }
+      hijo.anomalyGeneStrength = genDonor.anomalyGeneStrength * 0.5;
+    }
+  }
+
+  heritageNodes.push(hijo);
+
+  nodeA.available = false;
+  nodeB.available = false;
+
+  for (const n of heritageNodes) {
+    if (n.familyId === familiaActiva) {
+      const diferenciaGen = hijoGen - n.generation;
+      if (diferenciaGen >= 6) n.decayState = 3;
+      else if (diferenciaGen === 5) n.decayState = 2;
+      else if (diferenciaGen === 4) n.decayState = 1;
+    }
+  }
+}
+
+function addHeritageNode(clickX, clickY) {
+  const scale = heritageScale();
+  const stage = getStage();
+  const margen = heritageMargin(scale);
+  const sizeMin = tamanoMinBase * scale;
+  const sizeMax = tamanoMaxBase * scale;
+
+  familyCounter++;
+  const familyId = familyCounter;
+
+  const type = Math.floor(random(0, 2));
+  const last = heritageNodes[heritageNodes.length - 1];
+  let colorIndex;
+
+  if (last) {
+    if (type === last.type) {
+      do {
+        colorIndex = Math.floor(Math.random() * palette.length);
+      } while (colorIndex === last.colorIndex);
+    } else {
+      colorIndex = Math.floor(Math.random() * palette.length);
+    }
+  } else {
+    colorIndex = Math.floor(Math.random() * palette.length);
+  }
+
+  const posX = clampNum(clickX, stage.x + margen, stage.x + stage.width - margen);
+  const posY = Math.max(clickY, stage.y + margen);
+  const size = random(sizeMin, sizeMax);
+
+  const nuevo = new HeritageNode(posX, posY, size, type, colorIndex, null, null, false, 1, familyId);
+  heritageNodes.push(nuevo);
+
+  let pareja = null;
+  let minDist = Infinity;
+
+  for (const n of heritageNodes) {
+    if (n !== nuevo && n.available) {
+      const d = Math.hypot(nuevo.x - n.x, nuevo.yTarget - n.yTarget);
+      if (d < minDist) {
+        minDist = d;
+        pareja = n;
+      }
+    }
+  }
+
+  if (pareja && minDist <= distanciaPareja * scale) {
+    pairHeritageNodes(nuevo, pareja, scale, stage);
+  }
+}
+
+// Cruce espontáneo entre hijos de familias distintas que quedaron
+// cerca uno del otro, para que las familias no queden como islas
+// desconectadas entre sí.
+function checkHeritageMerges(scale, stage) {
+  for (let i = 0; i < heritageNodes.length; i++) {
+    const a = heritageNodes[i];
+    if (!a.available || a.generation < 2 || a.currentAlpha <= 1) continue;
+
+    for (let j = i + 1; j < heritageNodes.length; j++) {
+      const b = heritageNodes[j];
+      if (!b.available || b.generation < 2 || b.currentAlpha <= 1) continue;
+      if (a.familyId === b.familyId) continue;
+
+      const d = Math.hypot(a.x - b.x, a.yTarget - b.yTarget);
+      if (d <= distanciaPareja * scale) {
+        pairHeritageNodes(a, b, scale, stage);
+        return; // alcanza con un cruce por frame
+      }
+    }
+  }
+}
+
+// Si la familia crece por debajo del recuadro, se corre todo hacia
+// arriba para que siga siendo visible (el "scroll" del sketch
+// original). Corre en cada frame para reaccionar también a los
+// cruces espontáneos entre hijos.
+function settleHeritageBounds(scale, stage) {
+  if (heritageNodes.length === 0) return;
+
+  const limiteInferior = stage.y + stage.height - 55 * scale;
+  let maxY = 0;
+
+  for (const n of heritageNodes) {
+    if (n.yTarget > maxY) maxY = n.yTarget;
+  }
+
+  if (maxY > limiteInferior) {
+    const desplazamiento = maxY - limiteInferior;
+    for (const n of heritageNodes) {
+      n.yTarget -= desplazamiento;
+    }
+  }
+}
+
+// Poda los nodos ya completamente apagados para que la simulación
+// (sobre todo la miniatura, que corre indefinidamente) no acumule
+// nodos invisibles para siempre. Como su línea y su partícula ya no
+// se dibujan (currentAlpha <= 1), cortar el vínculo con sus hijos
+// antes de borrarlos no cambia nada en pantalla.
+function pruneHeritageNodes() {
+  for (let i = heritageNodes.length - 1; i >= 0; i--) {
+    const n = heritageNodes[i];
+    if (n.decayState >= 3 && n.currentAlpha <= 1) {
+      for (const m of heritageNodes) {
+        if (m.parent1 === n) m.parent1 = null;
+        if (m.parent2 === n) m.parent2 = null;
+      }
+      heritageNodes.splice(i, 1);
+    }
+  }
 }
 
 function drawHeritage(now) {
+  const scale = heritageScale();
+  const stage = getStage();
+
+  checkHeritageMerges(scale, stage);
+  settleHeritageBounds(scale, stage);
+  pruneHeritageNodes();
+
   ctx.save();
 
-  for (let level = 1; level < heritageLevels.length; level++) {
-    for (const node of heritageLevels[level]) {
-      node.updateParticle();
-      node.showLine();
-      node.showParticle();
-    }
+  for (const node of heritageNodes) {
+    node.updatePosition();
+    node.updateParticle();
+    node.showLine();
+    node.showParticle();
   }
 
-  for (const level of heritageLevels) {
-    for (const node of level) {
-      node.show();
-    }
+  for (const node of heritageNodes) {
+    node.show();
   }
 
   ctx.restore();
-}
-
-//------------------------------------
+}//------------------------------------
 // 3. Caducidad
 //------------------------------------
 class DecayFigure {
@@ -810,6 +1016,23 @@ function hexToRgba(hex, alpha) {
   const b = parseInt(clean.slice(4, 6), 16);
 
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function lerpColorHex(hexA, hexB, t) {
+  const a = hexA.replace("#", "");
+  const b = hexB.replace("#", "");
+  const ar = parseInt(a.slice(0, 2), 16);
+  const ag = parseInt(a.slice(2, 4), 16);
+  const ab = parseInt(a.slice(4, 6), 16);
+  const br = parseInt(b.slice(0, 2), 16);
+  const bg = parseInt(b.slice(2, 4), 16);
+  const bb = parseInt(b.slice(4, 6), 16);
+
+  const nr = Math.round(lerp(ar, br, t));
+  const ng = Math.round(lerp(ag, bg, t));
+  const nb = Math.round(lerp(ab, bb, t));
+
+  return `#${toHex(nr)}${toHex(ng)}${toHex(nb)}`;
 }
 
 function desaturate(hex, amount) {
