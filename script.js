@@ -1,9 +1,19 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+let dpr = window.devicePixelRatio || 1;
+let logicalWidth = window.innerWidth;
+let logicalHeight = window.innerHeight;
+
 function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  dpr = window.devicePixelRatio || 1;
+  logicalWidth = window.innerWidth;
+  logicalHeight = window.innerHeight;
+  canvas.width = logicalWidth * dpr;
+  canvas.height = logicalHeight * dpr;
+  canvas.style.width = logicalWidth + "px";
+  canvas.style.height = logicalHeight + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   createLobbyButtons();
 }
 window.addEventListener("resize", resize);
@@ -252,7 +262,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 function createLobbyButtons() {
-  const w = canvas.width;
+  const w = logicalWidth;
 
   const gap = 10;
   const buttonWidth = Math.min(170, (w - 64) / 3);
@@ -361,8 +371,8 @@ function getStage() {
   // experiencias.)
   if (isMobile) {
     const bottom = 40;
-    const availWidth = canvas.width - margin * 2;
-    const availHeight = canvas.height - top - bottom;
+    const availWidth = logicalWidth - margin * 2;
+    const availHeight = logicalHeight - top - bottom;
     const side = Math.min(availWidth, availHeight);
 
     return {
@@ -376,8 +386,8 @@ function getStage() {
   return {
     x: margin,
     y: top,
-    width: canvas.width - margin * 2,
-    height: canvas.height - top - margin
+    width: logicalWidth - margin * 2,
+    height: logicalHeight - top - margin
   };
 }
 
@@ -385,7 +395,7 @@ function getStage() {
 // implementación compartida (shared-background.js), la misma
 // que usan subsistema.js y subsistema2.js.
 function drawOuterBackground() {
-  drawSharedBackground(ctx, canvas.width, canvas.height);
+  drawSharedBackground(ctx, logicalWidth, logicalHeight);
 }
 
 function clipStage() {
@@ -566,7 +576,7 @@ function animate(now = performance.now()) {
   const delta = (now - lastTime) / 1000;
   lastTime = now;
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, logicalWidth, logicalHeight);
   drawOuterBackground();
 
   if (inLobby) {
