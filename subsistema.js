@@ -53,6 +53,15 @@ let memoryPressStart = 0;
 let pointerX = 0;
 let pointerY = 0;
 
+// Guarda permanentemente la posición del último toque, aunque la
+// marca que lo generó ya se haya desvanecido del todo. El rastro
+// hacia el toque siguiente siempre parte de acá, no de la última
+// marca que siga viva en pantalla (igual que ultimoX/ultimoY/
+// existeAnterior en el sketch original).
+let memoryLastX = 0;
+let memoryLastY = 0;
+let memoryHasPrevious = false;
+
 resize();
 
 //------------------------------------
@@ -150,16 +159,19 @@ function handlePressEnd() {
   addMemoryMark(pointerX, pointerY, performance.now() - memoryPressStart);
 }
 
-// Crea la nueva marca en (x, y) y, si había una marca previa,
-// el rastro (línea) que las conecta. "duracion" es cuánto se
-// mantuvo apretado, en ms.
+// Crea la nueva marca en (x, y) y, si ya hubo un toque antes (en
+// cualquier momento, aunque su marca ya se haya desvanecido), el
+// rastro (línea) que lo conecta con este.
 function addMemoryMark(x, y, duracion) {
   const nueva = new MemoryMark(x, y, duracion);
 
-  if (memoryMarks.length > 0) {
-    const anterior = memoryMarks[memoryMarks.length - 1];
-    memoryTrails.push(new MemoryTrail(anterior.x, anterior.y, nueva.x, nueva.y, duracion));
+  if (memoryHasPrevious) {
+    memoryTrails.push(new MemoryTrail(memoryLastX, memoryLastY, nueva.x, nueva.y));
   }
+
+  memoryLastX = nueva.x;
+  memoryLastY = nueva.y;
+  memoryHasPrevious = true;
 
   memoryMarks.push(nueva);
 }
@@ -357,18 +369,20 @@ class MemoryMark {
     // Duración de la presión (ms) → tamaño del círculo.
     this.size = clampNum(mapRange(duracion, 0, 5000, 18, 80), 18, 80);
     this.alpha = 180;
-    this.minAlpha = 0;
 
     // Presiones sostenidas (300ms o más) dejan un destello
     // permanente una vez que el círculo termina de desvanecerse.
     this.dejaDestello = duracion >= 300;
     this.intensidadDestello = clampNum(mapRange(duracion, 300, 5000, 50, 255), 50, 255);
+
+    // Cuántos aros concéntricos tendrá ese destello: a más tiempo
+    // sostenido, más capas.
+    this.cantidadAros = clampNum(Math.round(mapRange(duracion, 300, 5000, 1, 8)), 1, 8);
   }
 
   update() {
-    if (this.alpha > this.minAlpha) {
-      this.alpha -= 0.5;
-    }
+    // La desaparición del círculo no depende del tiempo de presión.
+    this.alpha -= 0.5;
   }
 
   show() {
@@ -383,8 +397,8 @@ class MemoryMark {
     circle(this.x, this.y, this.size * 1.8);
 
     ctx.strokeStyle = `rgba(211, 119, 13, ${a})`;
-    ctx.fillStyle = `rgba(211, 119, 13, ${a * 0.82})`;
-    ctx.lineWidth = 1.4;
+    ctx.fillStyle = `rgba(211, 119, 13, ${a})`;
+    ctx.lineWidth = 1.5;
     circle(this.x, this.y, this.size);
     ctx.stroke();
 
@@ -392,23 +406,21 @@ class MemoryMark {
   }
 }
 
-// Rastro: la línea que conecta una marca con la siguiente.
-// Nunca desaparece; cuanto más se sostuvo la presión, más
-// marcada queda.
+// Rastro: la línea que conecta un toque con el siguiente. Nunca
+// desaparece, y a diferencia de las marcas y los destellos, la
+// duración de la presión no la afecta en nada: todos los rastros
+// tienen siempre el mismo color, la misma opacidad y el mismo grosor.
 class MemoryTrail {
-  constructor(x1, y1, x2, y2, duracion) {
+  constructor(x1, y1, x2, y2) {
     this.x1 = x1;
     this.y1 = y1;
     this.x2 = x2;
     this.y2 = y2;
-    this.alpha = clampNum(mapRange(duracion, 0, 5000, 25, 255), 25, 255);
   }
 
   show() {
-    const a = this.alpha / 255;
-
-    ctx.strokeStyle = `rgba(223, 187, 145, ${a})`;
-    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(223, 187, 145, 0.196)";
+    ctx.lineWidth = 2.5;
 
     ctx.beginPath();
     ctx.moveTo(this.x1, this.y1);
@@ -417,24 +429,34 @@ class MemoryTrail {
   }
 }
 
-// Destello: lo que queda para siempre en el lugar donde una
-// marca "importante" (presión sostenida) terminó de desvanecerse.
+// Destello: lo que queda para siempre en el lugar donde una marca
+// "importante" (presión sostenida) terminó de desvanecerse. Son
+// varias capas circulares blancas y translúcidas, construidas de
+// afuera hacia adentro, más un punto blanco sólido en el centro.
 class MemoryFlash {
-  constructor(x, y, intensidad) {
+  constructor(x, y, intensidad, cantidadAros) {
     this.x = x;
     this.y = y;
     this.alpha = intensidad;
+    this.cantidadAros = cantidadAros;
   }
 
   show() {
     const a = this.alpha / 255;
 
     ctx.save();
-    ctx.fillStyle = `rgba(255, 191, 117, ${a * 0.12})`;
-    circle(this.x, this.y, 25);
 
-    ctx.fillStyle = `rgba(255, 220, 170, ${a})`;
+    for (let i = this.cantidadAros; i >= 1; i--) {
+      const tamCapa = 5 + i * 10;
+      const opacidad = a * 0.16;
+
+      ctx.fillStyle = `rgba(255, 255, 255, ${opacidad})`;
+      circle(this.x, this.y, tamCapa);
+    }
+
+    ctx.fillStyle = "rgba(255, 255, 255, 1)";
     circle(this.x, this.y, 5);
+
     ctx.restore();
   }
 }
@@ -442,12 +464,12 @@ class MemoryFlash {
 function drawMemory() {
   ctx.save();
 
-  for (const flash of memoryFlashes) {
-    flash.show();
-  }
-
   for (const trail of memoryTrails) {
     trail.show();
+  }
+
+  for (const flash of memoryFlashes) {
+    flash.show();
   }
 
   for (let i = memoryMarks.length - 1; i >= 0; i--) {
@@ -457,7 +479,7 @@ function drawMemory() {
 
     if (mark.alpha <= 0) {
       if (mark.dejaDestello) {
-        memoryFlashes.push(new MemoryFlash(mark.x, mark.y, mark.intensidadDestello));
+        memoryFlashes.push(new MemoryFlash(mark.x, mark.y, mark.intensidadDestello, mark.cantidadAros));
       }
       memoryMarks.splice(i, 1);
     }

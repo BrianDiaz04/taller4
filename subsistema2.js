@@ -253,10 +253,13 @@ const synergy = {
   globalGlow: 0,
   nextGroupId: 0,
   superRing: [],
+  // Mismos tonos que la paleta de Empatia (ver const empathy.colors
+  // mas abajo), asi el relleno que aparece al unir figuras se lee
+  // como el mismo lenguaje de color en las dos experiencias.
   colors: {
-    triangle: [255, 183, 178],
-    square: [199, 206, 234],
-    circle: [175, 228, 222],
+    triangle: [0, 245, 212],
+    square: [4, 139, 133],
+    circle: [72, 202, 228],
     celeste: [150, 205, 240],
     idle: [100, 105, 115]
   }
@@ -354,7 +357,7 @@ class SynergyShape {
     if (this.grouped || this.isControlNode) {
       pulseScale += synergy.globalGlow * 0.35;
       ctx.strokeStyle = rgba(c, 0.78 + synergy.globalGlow * 0.2);
-      ctx.fillStyle = rgba(c, 0.12 + synergy.globalGlow * 0.36);
+      ctx.fillStyle = rgba(c, 1);
       ctx.lineWidth = 2.5 + synergy.globalGlow * 3;
     } else {
       ctx.strokeStyle = rgba(c, 0.43);
@@ -1088,11 +1091,10 @@ function empathyMouseReleased() {
 }
 
 //------------------------------------
-// 3. Identidad: Reafirmacion (cambio directo y area suave)
+// 3. Identidad: Reafirmacion (Mayoria >= 3, Brillo al Reafirmar, Sin Texto)
 //------------------------------------
 const identity = {
   shapes: [],
-  particles: [],
   current: 0, // 0 = triangulo, 1 = cuadrado, 2 = circulo
   masked: false,
   maskTimer: 0,
@@ -1101,10 +1103,12 @@ const identity = {
   cooldownDuration: 1500,
   pulseScale: 1,
   dragged: null,
+  reaffirmGlow: 0, // brillo del fondo que destella al reafirmarse el triangulo
+  centralGlow: 0, // halo/blur propio de la figura central al cambiar de identidad
   colors: {
-    triangle: [255, 183, 178],
-    square: [199, 206, 234],
-    circle: [175, 228, 222]
+    triangle: [4, 139, 133],  // Teal oscuro / esmeralda
+    square: [0, 245, 212],    // Menta brillante / cian vivo
+    circle: [72, 202, 228]    // Cian suave
   }
 };
 
@@ -1113,9 +1117,10 @@ class IdentityShape {
     this.type = type; // 1 = cuadrado, 2 = circulo
     this.pos = vec(x, y);
     this.vel = randomVec(random(0.5, 1.5));
-    this.size = 24;
-    this.angle = random(0, Math.PI * 2);
+    this.size = 28;
+    this.angle = 0;
     this.dragging = false;
+    this.glow = 0; // 0..1: cuanto se ilumina al entrar a la zona de interaccion central
   }
 
   update(stage, cx, cy, influenceRadius) {
@@ -1138,10 +1143,10 @@ class IdentityShape {
       }
 
       // Rebote en los bordes del escenario
-      const left = stage.x + 20;
-      const right = stage.x + stage.width - 20;
-      const top = stage.y + 20;
-      const bottom = stage.y + stage.height - 20;
+      const left = stage.x + 30;
+      const right = stage.x + stage.width - 30;
+      const top = stage.y + 30;
+      const bottom = stage.y + stage.height - 30;
 
       if (this.pos.x < left) {
         this.pos.x = left;
@@ -1170,6 +1175,12 @@ class IdentityShape {
     }
 
     this.angle += this.type === 1 ? 0.02 : 0.01;
+
+    // Cuanto mas cerca del centro (dentro de la zona de interaccion),
+    // mas se ilumina la figura; afuera, el brillo se apaga suave.
+    const dCenter = dist(this.pos.x, this.pos.y, cx, cy);
+    const targetGlow = dCenter < influenceRadius ? 1 : 0;
+    this.glow = lerp(this.glow, targetGlow, 0.08);
   }
 
   display() {
@@ -1179,10 +1190,14 @@ class IdentityShape {
     ctx.translate(this.pos.x, this.pos.y);
     ctx.rotate(this.angle);
 
-    // Efecto luminoso, igual recurso que usa Incertidumbre/Ansiedad/Expectativa
-    ctx.shadowColor = rgba(col, 0.9);
-    ctx.shadowBlur = 8;
-    ctx.fillStyle = rgba(col, 0.82);
+    if (this.glow > 0.02) {
+      // Halo difuso del color propio de la figura, mas fuerte cuanto
+      // mas metida esta en la zona de interaccion del centro.
+      ctx.shadowColor = rgba(col, Math.min(1, this.glow) * 0.9);
+      ctx.shadowBlur = 22 * this.glow;
+    }
+
+    ctx.fillStyle = rgba(col, 1);
 
     if (this.type === 1) {
       rectCenter(0, 0, this.size, this.size);
@@ -1190,69 +1205,39 @@ class IdentityShape {
       circle(0, 0, this.size * 1.15);
     }
 
-    ctx.shadowBlur = 0;
     ctx.restore();
-  }
-}
-
-class IdentityParticle {
-  constructor(x, y, color) {
-    this.pos = vec(x, y);
-    // Expansion radial
-    this.vel = randomVec(random(3, 10));
-    this.size = random(4, 10);
-    this.alpha = 1;
-    this.color = color;
-  }
-
-  update() {
-    this.pos.x += this.vel.x;
-    this.pos.y += this.vel.y;
-    this.vel.x *= 0.85; // Friccion en el aire
-    this.vel.y *= 0.85;
-    this.alpha -= 0.02; // Desvanecimiento
-  }
-
-  display() {
-    ctx.fillStyle = rgba(this.color, Math.max(this.alpha, 0));
-    circle(this.pos.x, this.pos.y, this.size);
   }
 }
 
 function initRupture() {
   identity.shapes = [];
-  identity.particles = [];
   identity.current = 0;
   identity.masked = false;
   identity.maskTimer = 0;
   identity.cooldownTimer = -Infinity;
   identity.pulseScale = 1;
   identity.dragged = null;
+  identity.reaffirmGlow = 0;
+  identity.centralGlow = 0;
 
   const stage = getStage();
 
-  // 12 cuadrados arriba y 12 circulos abajo, flotando fuera del centro
-  for (let i = 0; i < 12; i++) {
+  // 3 cuadrados arriba y 3 circulos abajo, flotando fuera del centro
+  for (let i = 0; i < 3; i++) {
     identity.shapes.push(
       new IdentityShape(
         1,
-        random(stage.x + 20, stage.x + stage.width - 20),
-        random(stage.y + 20, stage.y + stage.height * 0.28)
+        random(stage.x + 30, stage.x + stage.width - 30),
+        random(stage.y + 30, stage.y + stage.height * 0.28)
       )
     );
     identity.shapes.push(
       new IdentityShape(
         2,
-        random(stage.x + 20, stage.x + stage.width - 20),
-        random(stage.y + stage.height * 0.72, stage.y + stage.height - 20)
+        random(stage.x + 30, stage.x + stage.width - 30),
+        random(stage.y + stage.height * 0.72, stage.y + stage.height - 30)
       )
     );
-  }
-}
-
-function createIdentityExplosion(x, y, color, count) {
-  for (let i = 0; i < count; i++) {
-    identity.particles.push(new IdentityParticle(x, y, color));
   }
 }
 
@@ -1273,12 +1258,10 @@ function fillIdentityGlyph(type, size) {
   }
 }
 
-// Zona de influencia: contorno circular celeste (sin relleno).
-function drawIdentityZone(cx, cy, radius, masked) {
-  const celeste = [140, 205, 235];
-
-  ctx.strokeStyle = rgba(celeste, masked ? 0.45 : 0.3);
-  ctx.lineWidth = 1.5;
+// Zona de influencia: contorno circular (sin relleno, linea muy fina).
+function drawIdentityZone(cx, cy, radius) {
+  ctx.strokeStyle = "rgba(0, 255, 255, 0.2)";
+  ctx.lineWidth = 0.2;
   strokeCircle(cx, cy, radius * 2);
 }
 
@@ -1290,10 +1273,13 @@ function drawRupture(frame, now) {
   const R = minSide * 0.115;
   const influenceRadius = minSide * 0.28;
 
-  drawBaseBackground(identity.masked ? 0.35 : 0);
+  // El brillo del fondo se desvanece suavemente y solo destella
+  // al momento exacto de la reafirmacion.
+  identity.reaffirmGlow = lerp(identity.reaffirmGlow, 0, 0.04);
+  drawBaseBackground(identity.reaffirmGlow);
 
-  // Zona de influencia (contorno circular celeste)
-  drawIdentityZone(cx, cy, influenceRadius, identity.masked);
+  // Zona de influencia (contorno circular, sin relleno)
+  drawIdentityZone(cx, cy, influenceRadius);
 
   // Analizar la presion externa
   let countSq = 0;
@@ -1306,22 +1292,26 @@ function drawRupture(frame, now) {
     }
   }
 
-  // Logica de cambio directo y reafirmacion
+  const totalInside = countSq + countCir;
+
+  // Logica de cambio por mayoria (requiere al menos 3 figuras en total)
   if (!identity.masked) {
     // Solo puede cambiar si no esta en tiempo de inmunidad
     if (now - identity.cooldownTimer > identity.cooldownDuration) {
-      if (countSq >= 4) {
-        identity.current = 1; // Se vuelve cuadrado
-        identity.masked = true;
-        identity.maskTimer = now;
-        identity.pulseScale = 1.4;
-        createIdentityExplosion(cx, cy, identity.colors.square, 40);
-      } else if (countCir >= 4) {
-        identity.current = 2; // Se vuelve circulo
-        identity.masked = true;
-        identity.maskTimer = now;
-        identity.pulseScale = 1.4;
-        createIdentityExplosion(cx, cy, identity.colors.circle, 40);
+      if (totalInside >= 3) {
+        if (countSq > countCir) {
+          identity.current = 1; // Se vuelve cuadrado
+          identity.masked = true;
+          identity.maskTimer = now;
+          identity.pulseScale = 1.4;
+          identity.centralGlow = 1;
+        } else if (countCir > countSq) {
+          identity.current = 2; // Se vuelve circulo
+          identity.masked = true;
+          identity.maskTimer = now;
+          identity.pulseScale = 1.4;
+          identity.centralGlow = 1;
+        }
       }
     }
   } else {
@@ -1331,11 +1321,11 @@ function drawRupture(frame, now) {
       identity.current = 0;
       identity.masked = false;
       identity.pulseScale = 1.8;
+      identity.reaffirmGlow = 1; // el fondo brilla unicamente cuando el triangulo se reafirma
+      identity.centralGlow = 1;
 
       // Activar inmunidad para evitar bugs de re-transformacion
       identity.cooldownTimer = now;
-
-      createIdentityExplosion(cx, cy, identity.colors.triangle, 80);
 
       // Expulsar a las figuras que estan cerca del centro
       for (const s of identity.shapes) {
@@ -1344,8 +1334,8 @@ function drawRupture(frame, now) {
           let push = sub(s.pos, vec(cx, cy));
           if (Math.hypot(push.x, push.y) === 0) push = randomVec(1);
           push = normalize(push);
-          s.vel.x += push.x * 6;
-          s.vel.y += push.y * 6;
+          s.vel.x += push.x * 28;
+          s.vel.y += push.y * 28;
         }
       }
     }
@@ -1353,6 +1343,10 @@ function drawRupture(frame, now) {
 
   // Suavizar el latido (vuelve a escala 1.0)
   identity.pulseScale = lerp(identity.pulseScale, 1, 0.1);
+  // El halo de la figura central se apaga solo, mas lento que el
+  // destello de fondo, para que se note como una respuesta breve
+  // al momento del cambio.
+  identity.centralGlow = lerp(identity.centralGlow, 0, 0.03);
 
   // Dibujar la identidad central
   ctx.save();
@@ -1366,13 +1360,17 @@ function drawRupture(frame, now) {
       ? identity.colors.circle
       : identity.colors.triangle;
 
-  // Luz neutra (blanquecina) en vez de un brillo intenso del color
-  // propio de la figura, mismo recurso (shadowBlur) que el resto de
-  // las figuras de esta pantalla.
-  ctx.shadowColor = "rgba(255, 255, 255, 0.65)";
-  ctx.shadowBlur = 22;
-  ctx.fillStyle = rgba(currentColor, 0.88);
+  if (identity.centralGlow > 0.02) {
+    // Respuesta visual al cambio: la figura central se ilumina con
+    // un blur de su propio color, igual que las figuras externas.
+    ctx.shadowColor = rgba(currentColor, Math.min(1, identity.centralGlow));
+    ctx.shadowBlur = 45 * identity.centralGlow;
+  }
+
+  ctx.fillStyle = rgba(currentColor, 1);
   fillIdentityGlyph(identity.current, R);
+
+  // El detalle interno no lleva el halo, para que no se vea doble.
   ctx.shadowBlur = 0;
 
   // Detalle poetico: el "corazon" interno triangular
@@ -1393,18 +1391,10 @@ function drawRupture(frame, now) {
     s.update(stage, cx, cy, influenceRadius);
     s.display();
   }
-
-  // Particulas
-  for (let i = identity.particles.length - 1; i >= 0; i--) {
-    const p = identity.particles[i];
-    p.update();
-    p.display();
-    if (p.alpha <= 0) identity.particles.splice(i, 1);
-  }
 }
 
 function ruptureMousePressed(x, y) {
-  let minDist = 30;
+  let minDist = 35;
   identity.dragged = null;
 
   for (const s of identity.shapes) {
