@@ -280,6 +280,10 @@ class SynergyShape {
     this.isControlNode = false;
     this.currentColor = [...synergy.colors.idle];
     this.targetColor = [...synergy.colors.idle];
+
+    // En mobile las figuras de Colaboracion se reducen un 25% frente
+    // a su tamaño original (30px). En escritorio no cambia nada.
+    if (W < 768) this.size = this.size * 0.75;
   }
 
   updatePhysics() {
@@ -436,8 +440,12 @@ function initSynergy() {
   const sy0 = stage.y + 60;
   const sy1 = stage.y + stage.height - 60;
 
-  for (let i = 0; i < 8; i++) synergy.shapes.push(new SynergyShape(0, random(sx0, sx1), random(sy0, sy1)));
-  for (let i = 0; i < 8; i++) synergy.shapes.push(new SynergyShape(1, random(sx0, sx1), random(sy0, sy1)));
+  // En mobile la cantidad de figuras iniciales se reduce a la mitad
+  // (de 8+8 a 4+4) para que no queden amontonadas en un escenario
+  // chico. En escritorio se mantienen las 8+8 de siempre.
+  const countPerType = W < 768 ? 4 : 8;
+  for (let i = 0; i < countPerType; i++) synergy.shapes.push(new SynergyShape(0, random(sx0, sx1), random(sy0, sy1)));
+  for (let i = 0; i < countPerType; i++) synergy.shapes.push(new SynergyShape(1, random(sx0, sx1), random(sy0, sy1)));
 }
 
 function drawSynergy(frame) {
@@ -457,17 +465,14 @@ function drawSynergy(frame) {
     const globalAngle = frame * 0.015;
 
     // Los círculos de control ya no quedan como un aro de círculos
-    // separados: convergen todos hacia el mismo punto central, tan
-    // cerca entre sí que se leen como un solo círculo (y de paso
-    // vira su color hacia el celeste, la tonalidad de la unión total).
-    const mergeRadius = 12;
-
-    for (let i = 0; i < synergy.superRing.length; i++) {
-      const c = synergy.superRing[i];
-      const angle = globalAngle + (i * Math.PI * 2) / synergy.superRing.length;
-
-      c.target.x = center.x + Math.cos(angle) * mergeRadius;
-      c.target.y = center.y + Math.sin(angle) * mergeRadius;
+    // separados: convergen todos exactamente al mismo punto central
+    // (mismo tamaño, mismo relleno opaco), así se superponen del todo
+    // y se leen como un único círculo en vez de un racimo de varios
+    // círculos apenas separados (y de paso viran su color hacia el
+    // celeste, la tonalidad de la unión total).
+    for (const c of synergy.superRing) {
+      c.target.x = center.x;
+      c.target.y = center.y;
       c.targetColor = [...synergy.colors.celeste];
     }
 
@@ -504,20 +509,24 @@ function drawSynergy(frame) {
       synergy.particles.push(new SynergyParticle(center.x + random(-15, 15), center.y + random(-15, 15), synergy.colors.celeste));
     }
   } else {
-    // Sin aro mayor: cada grupo orbita a su propio círculo de control
     synergy.globalGlow = lerp(synergy.globalGlow, 0, 0.08);
+  }
 
-    for (const c of controlCircles) {
-      if (synergy.superRing.includes(c)) continue;
+  // Grupos que no forman parte del aro mayor: cada uno orbita a su
+  // propio círculo de control. Corre siempre (haya o no un aro mayor
+  // activo en paralelo), para que un grupo nuevo formado después de
+  // la fusión también se mantenga armado en vez de que su círculo se
+  // vaya alejando de las figuras que quedaron quietas.
+  for (const c of controlCircles) {
+    if (synergy.superRing.includes(c)) continue;
 
-      const members = synergy.shapes.filter((s) => s.groupId === c.linkedGroupId && !s.isControlNode);
+    const members = synergy.shapes.filter((s) => s.groupId === c.linkedGroupId && !s.isControlNode);
 
-      members.forEach((m, j) => {
-        const mAngle = frame * 0.03 + (j * Math.PI * 2) / members.length;
-        m.target.x = c.pos.x + Math.cos(mAngle) * 55;
-        m.target.y = c.pos.y + Math.sin(mAngle) * 55;
-      });
-    }
+    members.forEach((m, j) => {
+      const mAngle = frame * 0.03 + (j * Math.PI * 2) / members.length;
+      m.target.x = c.pos.x + Math.cos(mAngle) * 55;
+      m.target.y = c.pos.y + Math.sin(mAngle) * 55;
+    });
   }
 
   // Enlaces visuales de cada grupo hacia su círculo de control
@@ -1033,14 +1042,28 @@ class EmpathyBgShape {
 function initEmpathy() {
   const stage = getStage();
 
+  // En mobile las 3 figuras principales son un poco mas chicas y
+  // arrancan mas separadas entre si (mas cerca de las esquinas del
+  // escenario), ya que en una pantalla chica y cuadrada quedaban muy
+  // pegoteadas. En escritorio no se toca nada.
+  const isMobile = W < 768;
+  const sizeScale = isMobile ? 0.8 : 1;
+  const posA = isMobile ? 0.18 : 0.28;
+  const posB = isMobile ? 0.82 : 0.72;
+  const posTopY = isMobile ? 0.28 : 0.36;
+  const posBottomY = isMobile ? 0.82 : 0.74;
+
   empathy.entities = [
-    new EmpathyEntity(0, stage.x + stage.width * 0.28, stage.y + stage.height * 0.36, empathy.colors.triangle, 22, 0.08),
-    new EmpathyEntity(1, stage.x + stage.width * 0.72, stage.y + stage.height * 0.36, empathy.colors.square, 28, 0.02),
-    new EmpathyEntity(2, stage.x + stage.width * 0.5, stage.y + stage.height * 0.74, empathy.colors.circle, 24, 0.04)
+    new EmpathyEntity(0, stage.x + stage.width * posA, stage.y + stage.height * posTopY, empathy.colors.triangle, 22 * sizeScale, 0.08),
+    new EmpathyEntity(1, stage.x + stage.width * posB, stage.y + stage.height * posTopY, empathy.colors.square, 28 * sizeScale, 0.02),
+    new EmpathyEntity(2, stage.x + stage.width * 0.5, stage.y + stage.height * posBottomY, empathy.colors.circle, 24 * sizeScale, 0.04)
   ];
 
+  // En mobile tambien se reduce la cantidad de figuras de fondo
+  // (de 15 a 8) para que el escenario chico no se vea saturado.
   empathy.bgShapes = [];
-  for (let i = 0; i < 15; i++) empathy.bgShapes.push(new EmpathyBgShape(stage));
+  const bgCount = isMobile ? 8 : 15;
+  for (let i = 0; i < bgCount; i++) empathy.bgShapes.push(new EmpathyBgShape(stage));
 
   empathy.dragged = null;
   empathy.globalGlow = 0;

@@ -300,7 +300,46 @@ if (isMini) {
     }, wait);
   }
 
+  // Siembra un poco de contenido apenas arranca la miniatura, en vez
+  // de dejarla con el lienzo vacío hasta el primer click simulado
+  // (5-6s después). Así queda consistente con las miniaturas de
+  // subsistema2.js y script.js, que ya arrancan con formas dibujadas.
+  // Se difiere con setTimeout(0) para ejecutarse recién cuando el
+  // resto del archivo ya terminó de definirse (más abajo están las
+  // clases MemoryMark, HeritageNode y DecayFigure que usa).
+  setTimeout(seedMiniPreview, 0);
   scheduleMiniClick();
+}
+
+// Cantidad de marcas/nodos/figuras iniciales que se siembran en la
+// miniatura (ver bloque de arriba).
+const MINI_SEED_COUNT = 8;
+
+function seedMiniPreview() {
+  if (currentSystem === "memoria") {
+    for (let i = 0; i < MINI_SEED_COUNT; i++) {
+      addMemoryMark(random(60, window.innerWidth - 60), random(120, window.innerHeight - 60), random(80, 2200));
+    }
+  } else if (currentSystem === "herencia") {
+    for (let i = 0; i < MINI_SEED_COUNT; i++) {
+      addHeritageNode(random(60, window.innerWidth - 60), random(140, window.innerHeight - 60));
+    }
+  } else if (currentSystem === "caducidad") {
+    for (let i = 0; i < MINI_SEED_COUNT; i++) {
+      const type = Math.floor(random(0, 2));
+      const color = randomFrom(palette);
+      decayFigures.push(
+        new DecayFigure(
+          random(60, window.innerWidth - 60),
+          random(120, window.innerHeight - 60),
+          random(50, 90),
+          type,
+          color,
+          random(3000, 6000)
+        )
+      );
+    }
+  }
 }
 
 requestAnimationFrame(animate);
@@ -537,7 +576,12 @@ const tamanoMaxBase = 50;
 
 function heritageScale() {
   const stage = getStage();
-  return clampNum(stage.width / 620, 0.55, 1);
+  const scale = clampNum(stage.width / 620, 0.55, 1);
+  // En mobile el clamp de arriba ya achica un poco la escena, pero
+  // no alcanza: las figuras seguían viéndose grandes frente a un
+  // escenario chico. Se aplica una reducción extra sólo en mobile;
+  // en escritorio queda exactamente igual que antes.
+  return isMobile ? scale * 0.6 : scale;
 }
 
 function heritageMargin(scale) {

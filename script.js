@@ -1,9 +1,27 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+// Igual que en subsistema.js y subsistema2.js: el canvas se define
+// en píxeles físicos (según devicePixelRatio) para que no se vea
+// borroso en pantallas de alta densidad (la mayoría de los
+// celulares), y se reescala con CSS al tamaño en píxeles lógicos.
+// El resto del código sigue trabajando con W/H (píxeles lógicos),
+// nunca con canvas.width/canvas.height directamente.
+let dpr = window.devicePixelRatio || 1;
+let W = window.innerWidth;
+let H = window.innerHeight;
+
 function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   createLobbyButtons();
 }
 window.addEventListener("resize", resize);
@@ -252,7 +270,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 function createLobbyButtons() {
-  const w = canvas.width;
+  const w = W;
 
   const gap = 10;
   const buttonWidth = Math.min(170, (w - 64) / 3);
@@ -361,8 +379,8 @@ function getStage() {
   // experiencias.)
   if (isMobile) {
     const bottom = 40;
-    const availWidth = canvas.width - margin * 2;
-    const availHeight = canvas.height - top - bottom;
+    const availWidth = W - margin * 2;
+    const availHeight = H - top - bottom;
     const side = Math.min(availWidth, availHeight);
 
     return {
@@ -376,8 +394,8 @@ function getStage() {
   return {
     x: margin,
     y: top,
-    width: canvas.width - margin * 2,
-    height: canvas.height - top - margin
+    width: W - margin * 2,
+    height: H - top - margin
   };
 }
 
@@ -385,7 +403,7 @@ function getStage() {
 // implementación compartida (shared-background.js), la misma
 // que usan subsistema.js y subsistema2.js.
 function drawOuterBackground() {
-  drawSharedBackground(ctx, canvas.width, canvas.height);
+  drawSharedBackground(ctx, W, H);
 }
 
 function clipStage() {
@@ -566,7 +584,7 @@ function animate(now = performance.now()) {
   const delta = (now - lastTime) / 1000;
   lastTime = now;
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, W, H);
   drawOuterBackground();
 
   if (inLobby) {
