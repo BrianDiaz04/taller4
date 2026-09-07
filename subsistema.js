@@ -144,7 +144,8 @@ function handlePressStart(x, y) {
     const type = aggressive ? 2 : Math.floor(Math.random() * 2);
     const color = randomFrom(palette);
     const life = random(3000, 6000);
-    const size = random(50, 90);
+    // Tamaño reducido a la mitad del original (era random(50, 90)).
+    const size = random(25, 45);
 
     decayFigures.push(new DecayFigure(x, y, size, type, color, life));
   }
@@ -332,7 +333,8 @@ function seedMiniPreview() {
         new DecayFigure(
           random(60, window.innerWidth - 60),
           random(120, window.innerHeight - 60),
-          random(50, 90),
+          // Tamaño reducido a la mitad del original (era random(50, 90)).
+          random(25, 45),
           type,
           color,
           random(3000, 6000)
@@ -576,12 +578,7 @@ const tamanoMaxBase = 50;
 
 function heritageScale() {
   const stage = getStage();
-  const scale = clampNum(stage.width / 620, 0.55, 1);
-  // En mobile el clamp de arriba ya achica un poco la escena, pero
-  // no alcanza: las figuras seguían viéndose grandes frente a un
-  // escenario chico. Se aplica una reducción extra sólo en mobile;
-  // en escritorio queda exactamente igual que antes.
-  return isMobile ? scale * 0.6 : scale;
+  return clampNum(stage.width / 620, 0.55, 1);
 }
 
 function heritageMargin(scale) {
